@@ -82,10 +82,69 @@
 - name: Resolve exact Docker packages from the selected native release source
   ansible.builtin.include_tasks: docker-resolve.yml
 
+- name: Inspect Docker's running state before any Docker package changes
+  ansible.builtin.command:
+    argv: [systemctl, is-active, docker.service]
+  register: tools_docker_service_before
+  changed_when: false
+  failed_when: tools_docker_service_before.rc not in [0, 3, 4]
+  check_mode: false
+
+- name: Refuse changing an active daemon without a managed installed engine package
+  ansible.builtin.assert:
+    that:
+      - tools_docker_service_before.rc != 0 or tools_docker_engine_installed_version | length > 0
+    fail_msg: >-
+      An active Docker daemon has no installed engine package from the selected
+      source. Its state is not adopted or restarted automatically.
+
+- name: Read the active local daemon version without depending on CLI API compatibility
+  ansible.builtin.uri:
+    url: http://localhost/version
+    unix_socket: /var/run/docker.sock
+    method: GET
+    use_proxy: false
+    status_code: 200
+    timeout: 15
+  register: tools_docker_server_before
+  when: tools_docker_service_before.rc == 0
+
+- name: Require a valid version response from the existing managed daemon
+  ansible.builtin.assert:
+    that:
+      - tools_docker_server_before.json is mapping
+      - tools_docker_server_before.json.Version is string
+      - tools_docker_server_before.json.Version | length > 0
+    fail_msg: Cannot establish the active Docker server version; refusing a blind update.
+  when: tools_docker_service_before.rc == 0
+
+- name: Identify an old active engine or a pending engine package replacement
+  ansible.builtin.set_fact:
+    tools_docker_daemon_old: >-
+      {{ tools_docker_service_before.rc == 0 and
+      (tools_docker_server_before.json.Version != docker_version or
+      tools_docker_engine_package_change_required) }}
+
+- name: Require explicit maintenance and a drained host before restarting an old daemon
+  ansible.builtin.assert:
+    that:
+      - not tools_docker_daemon_old or (tool_allow_upgrades and maintenance_confirmed and tools_drain_confirmed)
+      - not tools_docker_daemon_old or tools_docker_engine_package_change_required or docker_restart_pending
+    fail_msg: >-
+      Docker's active server is old or its engine package needs replacement.
+      Drain affected jobs/workloads and confirm tool_allow_upgrades,
+      maintenance_confirmed, and tools_drain_confirmed. If packages already match
+      but the old daemon remains, additionally set docker_restart_pending=true.
+      No unapproved restart is performed.
+
 - name: Install the exact validated Docker and Compose apt packages
   ansible.builtin.include_tasks: packages.yml
   vars:
     tools_requested_packages: "{{ tools_docker_exact_packages | unique | list }}"
+
+- name: Record whether the Docker package transaction actually changed packages
+  ansible.builtin.set_fact:
+    tools_docker_packages_changed: "{{ tools_package_install.changed | default(false) }}"
 
 - name: Ensure Docker access group exists
   ansible.builtin.group:
@@ -101,11 +160,13 @@
   loop_control:
     label: "{{ item.user }}"
 
-- name: Enable and start Docker without replacing its daemon configuration
+- name: Start Docker or restart only an approved old engine after package replacement
   ansible.builtin.systemd_service:
     name: docker
     enabled: true
-    state: started
+    state: >-
+      {{ 'restarted' if tools_docker_daemon_old and
+      (tools_docker_packages_changed or docker_restart_pending) else 'started' }}
 
 - name: Verify installed Docker version
   ansible.builtin.command:
@@ -126,6 +187,30 @@
   ansible.builtin.assert:
     that:
       - tools_docker_runtime.stdout is search('version ' + (docker_version | regex_escape) + '[, ]')
+
+- name: Query the actual local Docker daemon ServerVersion
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - --host=unix:///var/run/docker.sock
+      - info
+      - --format
+      - "{{ '{{.ServerVersion}}' }}"
+  environment:
+    DOCKER_CONTEXT: ""
+    DOCKER_API_VERSION: ""
+  register: tools_docker_server_runtime
+  changed_when: false
+  check_mode: false
+
+- name: Require the requested daemon version rather than accepting a new CLI alone
+  ansible.builtin.assert:
+    that:
+      - tools_docker_server_runtime.stdout | trim == docker_version
+    fail_msg: >-
+      Docker CLI and daemon do not match the requested release. The daemon was
+      not silently accepted or unconditionally restarted. Schedule drained
+      maintenance and explicitly approve docker_restart_pending if needed.
 
 - name: Confirm the exact Compose release is active when enabled
   ansible.builtin.assert:

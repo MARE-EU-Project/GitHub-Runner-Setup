@@ -28,8 +28,22 @@
       - >-
         not (tools_vagrant_plugins_before.stdout is search('(?m)^vagrant-libvirt ')) or
         tools_vagrant_plugins_before.stdout is search('(?m)^vagrant-libvirt \(' + (vagrant_libvirt_version | regex_escape) + '[,)]') or
-        tool_allow_upgrades
-    fail_msg: Existing vagrant-libvirt differs from the requested release; set tool_allow_upgrades after review.
+        (tool_allow_upgrades and maintenance_confirmed and tools_drain_confirmed)
+    fail_msg: >-
+      Existing vagrant-libvirt differs from the requested release. Drain affected
+      workloads and set tool_allow_upgrades, maintenance_confirmed, and tools_drain_confirmed.
+
+- name: Protect any existing plugin environment before dependency resolution can change it
+  ansible.builtin.assert:
+    that:
+      - >-
+        tools_vagrant_plugins_before.stdout is search('(?m)^vagrant-libvirt \(' + (vagrant_libvirt_version | regex_escape) + '[,)]') or
+        not (tools_vagrant_plugins_before.stdout is search('(?m)^[a-zA-Z0-9_-]+ \(')) or
+        (tool_allow_upgrades and maintenance_confirmed and tools_drain_confirmed)
+    fail_msg: >-
+      Installing a plugin into an existing plugin environment can change shared
+      dependency gems. Confirm maintenance and drain with tool_allow_upgrades,
+      maintenance_confirmed, and tools_drain_confirmed before proceeding.
 
 - name: Preserve unrelated plugins rather than resolving their unpinned dependencies
   ansible.builtin.assert:

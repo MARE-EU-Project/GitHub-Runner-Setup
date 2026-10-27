@@ -31,10 +31,7 @@
 - name: Resolve native Docker versions before creating runner accounts
   ansible.builtin.include_tasks: docker-resolve.yml
 
-- name: Simulate native Docker installation before account or package changes
-  ansible.builtin.command:
-    argv: "{{ ['apt-get', '-s', '--no-remove', '--no-install-recommends', 'install'] + tools_docker_exact_packages }}"
-  environment:
-    LC_ALL: C
-  changed_when: false
-  check_mode: false
+- name: Validate native Docker dependencies and update safety before account changes
+  ansible.builtin.include_tasks: package-preflight.yml
+  vars:
+    tools_requested_packages: "{{ tools_docker_exact_packages }}"

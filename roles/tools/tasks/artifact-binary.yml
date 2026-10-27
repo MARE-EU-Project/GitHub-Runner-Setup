@@ -53,12 +53,13 @@
         not tools_artifact_existing.stat.exists or
         (tools_artifact_existing.stat.isreg | default(false) and
         tools_artifact_existing.stat.checksum | default('') == tools_artifact_source.stat.checksum) or
-        (tool_allow_upgrades and not (tools_artifact_existing.stat.isdir | default(false)))
+        (tool_allow_upgrades and maintenance_confirmed and tools_drain_confirmed and
+        not (tools_artifact_existing.stat.isdir | default(false)))
     fail_msg: >-
       {{ tools_artifact.install_dir | default('/usr/local/bin') }}/{{ tools_artifact_binding.name }}
       conflicts with the exact requested release. No file was replaced. Review
-      the existing installation and explicitly set tool_allow_upgrades=true
-      to permit replacement.
+      the existing installation and explicitly set tool_allow_upgrades=true,
+      maintenance_confirmed=true, and tools_drain_confirmed=true to replace it.
 
 - name: Ensure the root-controlled executable directory exists
   ansible.builtin.file:

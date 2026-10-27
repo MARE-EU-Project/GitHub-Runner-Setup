@@ -72,8 +72,19 @@
       - >-
         not tools_docker_installed_package.stdout.startswith('install ok installed|') or
         tools_docker_installed_package.stdout == 'install ok installed|' + tools_docker_selected_apt_version or
-        tool_allow_upgrades
+        (tool_allow_upgrades and maintenance_confirmed and tools_drain_confirmed)
     fail_msg: >-
       Existing {{ tools_docker_package.name }} differs from the requested apt release.
       Existing daemon state is preserved. Schedule maintenance and explicitly enable
-      tool_allow_upgrades if this package change is intended; downgrades remain forbidden.
+      tool_allow_upgrades, maintenance_confirmed, and tools_drain_confirmed if
+      this package change is intended; downgrades remain forbidden.
+
+- name: Remember the installed engine package identity before any package transaction
+  ansible.builtin.set_fact:
+    tools_docker_engine_installed_version: >-
+      {{ tools_docker_installed_package.stdout.split('|', 1)[1]
+      if tools_docker_installed_package.stdout.startswith('install ok installed|') else '' }}
+    tools_docker_engine_package_change_required: >-
+      {{ tools_docker_installed_package.stdout.startswith('install ok installed|') and
+      tools_docker_installed_package.stdout != 'install ok installed|' + tools_docker_selected_apt_version }}
+  when: tools_docker_package.name == tools_docker_packages.engine

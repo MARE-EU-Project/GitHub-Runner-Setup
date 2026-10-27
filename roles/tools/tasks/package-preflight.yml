@@ -1,0 +1,45 @@
+---
+# Input: tools_requested_packages; only missing or differently pinned packages
+# enter the simulated transaction, matching apt state=present behavior.
+- name: Read installed package versions without upgrading installed packages
+  ansible.builtin.package_facts:
+    manager: apt
+
+- name: Initialize the actual requested package transaction
+  ansible.builtin.set_fact:
+    tools_packages_needing_install: []
+
+- name: Select only missing packages or explicit version changes
+  ansible.builtin.set_fact:
+    tools_packages_needing_install: "{{ tools_packages_needing_install + [item] }}"
+  loop: "{{ tools_requested_packages }}"
+  when: >-
+    item.startswith('/') or item.split('=')[0] not in ansible_facts.packages or
+    ('=' in item and item.split('=', 1)[1] not in
+    (ansible_facts.packages.get(item.split('=')[0], []) | map(attribute='version') | list))
+
+- name: Check package availability and dependency resolution before installation
+  ansible.builtin.command:
+    argv: "{{ ['apt-get', '-s', '--no-remove', '--no-install-recommends', 'install'] + tools_packages_needing_install }}"
+  environment:
+    LC_ALL: C
+  register: tools_package_simulation
+  changed_when: false
+  check_mode: false
+  when: tools_packages_needing_install | length > 0
+
+- name: Detect updates to any already installed package in the dependency transaction
+  ansible.builtin.set_fact:
+    tools_package_updates_planned: >-
+      {{ tools_package_simulation.stdout | default('') is search('(?m)^Inst\s+\S+\s+\[') }}
+
+- name: Require maintenance and operator-confirmed drain before changing installed packages
+  ansible.builtin.assert:
+    that:
+      - not tools_package_updates_planned or (tool_allow_upgrades and maintenance_confirmed and tools_drain_confirmed)
+    fail_msg: >-
+      This transaction changes already installed packages and may affect managed
+      runner, Docker, libvirt, or VM workloads. Drain affected jobs/workloads and
+      explicitly set tool_allow_upgrades=true, maintenance_confirmed=true, and
+      tools_drain_confirmed=true. This operator drain attestation is required;
+      tool_allow_upgrades alone never authorizes updates.

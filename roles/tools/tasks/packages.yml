@@ -1,17 +1,11 @@
 ---
 # Input: tools_requested_packages, containing apt names or exact name=version.
-- name: Check package availability and dependency resolution before installation
-  ansible.builtin.command:
-    argv: "{{ ['apt-get', '-s', '--no-remove', '--no-install-recommends', 'install'] + tools_requested_packages }}"
-  environment:
-    LC_ALL: C
-  register: tools_package_simulation
-  changed_when: false
-  check_mode: false
+- name: Validate the complete package transaction and any maintenance requirements
+  ansible.builtin.include_tasks: package-preflight.yml
 
 - name: Install validated packages without changing existing configuration
   ansible.builtin.apt:
-    name: "{{ tools_requested_packages }}"
+    name: "{{ tools_packages_needing_install }}"
     state: present
     install_recommends: false
     force_apt_get: true
@@ -19,3 +13,5 @@
     allow_downgrade: false
     fail_on_autoremove: true
     policy_rc_d: 101
+  register: tools_package_install
+  when: tools_packages_needing_install | length > 0

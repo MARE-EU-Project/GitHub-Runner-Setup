@@ -14,6 +14,10 @@ runner_state_dir: /var/lib/mare-runner
 runner_home_root: /home
 allow_reboot: false
 maintenance_confirmed: false
+# Operator attests that affected runner jobs and host workloads are drained.
+tools_drain_confirmed: false
+# Opt in separately when packages already match but an old daemon still runs.
+docker_restart_pending: false
 
 docker_version: "29.1.3"
 docker_compose_version: "2.40.3"

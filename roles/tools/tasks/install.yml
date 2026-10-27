@@ -13,6 +13,9 @@
   ansible.builtin.assert:
     that:
       - tool_allow_upgrades is boolean
+      - tools_drain_confirmed is boolean
+      - docker_restart_pending is boolean
+      - not docker_restart_pending or (tool_allow_upgrades and maintenance_confirmed and tools_drain_confirmed)
       - minikube_initialize is boolean
       - docker_compose_enabled is boolean
       - kubectl_enabled is boolean
