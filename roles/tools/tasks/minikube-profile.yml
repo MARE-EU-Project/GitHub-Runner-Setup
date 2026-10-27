@@ -1,0 +1,25 @@
+---
+- name: Process one runner profile using the shared identity and path contract
+  vars:
+    tools_minikube_profile: >-
+      {{ tools_runner.minikube_profile |
+      default(minikube_profile + ('-' + tools_runner.name if runner_instances | length > 1 else '')) }}
+    tools_minikube_kubeconfig: "/home/{{ tools_runner.user }}/.config/runner-kubernetes/config"
+    tools_minikube_marker: "/var/lib/runner-tools/minikube/{{ tools_runner.user }}/{{ tools_minikube_profile }}.json"
+    tools_minikube_identity:
+      schema: 1
+      runner: "{{ tools_runner.name }}"
+      user: "{{ tools_runner.user }}"
+      profile: "{{ tools_minikube_profile }}"
+      driver: "{{ minikube_driver }}"
+      kubernetes_version: "{{ kubernetes_version }}"
+      cpus: "{{ minikube_cpus | int }}"
+      memory_mb: "{{ minikube_memory_mb | int }}"
+  block:
+    - name: Inspect a profile without modifying its state
+      ansible.builtin.include_tasks: minikube-inspect.yml
+      when: tools_minikube_phase == 'inspect'
+
+    - name: Initialize or verify a profile after aggregate capacity checks
+      ansible.builtin.include_tasks: minikube-user.yml
+      when: tools_minikube_phase == 'initialize'

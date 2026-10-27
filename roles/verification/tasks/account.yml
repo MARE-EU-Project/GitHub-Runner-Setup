@@ -1,0 +1,126 @@
+---
+- name: Resolve the runner account
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ verification_instance.user }}"
+  no_log: true
+
+- name: Verify account availability and directory permissions without a login shell
+  become: true
+  become_user: "{{ verification_instance.user }}"
+  ansible.builtin.command:
+    argv:
+      - /bin/sh
+      - -c
+      - 'test "$(id -un)" = "$1" && test -r "$2" && test -w "$2" && test -x "$2" && test -x "$2/bin/Runner.Listener" && test -w "$3" && test -x "$3"'
+      - mare-verification
+      - "{{ verification_instance.user }}"
+      - "{{ verification_instance.install_dir }}"
+      - "{{ verification_instance.work_dir }}"
+  environment:
+    PATH: "{{ verification_path | default('/usr/local/bin:/usr/bin:/bin') }}"
+  changed_when: false
+  no_log: true
+
+- name: Check runner service health separately from software versions
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - is-active
+      - "mare-runner-{{ verification_instance.name }}.service"
+  changed_when: false
+  no_log: true
+
+- name: Verify the service runs under the intended unprivileged account
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - show
+      - "mare-runner-{{ verification_instance.name }}.service"
+      - --property=User
+      - --value
+  register: verification_service_user
+  changed_when: false
+  failed_when: verification_service_user.rc != 0 or verification_service_user.stdout | trim != verification_instance.user
+  no_log: true
+
+- name: Read the actual installed Actions runner version as its account
+  become: true
+  become_user: "{{ verification_instance.user }}"
+  ansible.builtin.command:
+    argv: ["{{ verification_instance.install_dir }}/bin/Runner.Listener", --version]
+  environment:
+    PATH: "{{ verification_path }}"
+    HOME: "{{ ansible_facts.getent_passwd[verification_instance.user][4] }}"
+  register: verification_runner_version
+  changed_when: false
+  failed_when: >-
+    verification_runner_version.rc != 0 or
+    verification_runner_version.stdout | trim is not match('^[0-9]+[.][0-9]+[.][0-9]+$') or
+    verification_runner_version.stdout | trim is version(runner_version, '<')
+  no_log: true
+
+- name: Verify enabled software versions as the runner account
+  become: true
+  become_user: "{{ verification_instance.user }}"
+  ansible.builtin.command:
+    argv: "{{ item.command }}"
+  environment:
+    PATH: "{{ verification_path | default('/usr/local/bin:/usr/bin:/bin') }}"
+    HOME: "{{ ansible_facts.getent_passwd[verification_instance.user][4] }}"
+  loop: "{{ verification_tools | selectattr('enabled', 'equalto', true) | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: verification_version_results
+  changed_when: false
+  failed_when: >-
+    verification_version_results.rc != 0 or
+    (verification_version_results.stdout is not search(
+      ('vagrant-libvirt \\(' if item.name == 'vagrant_libvirt' else '(?<![0-9.])v?') ~
+      (item.version | regex_escape) ~ '(?![0-9.])'))
+  no_log: true
+
+- name: Verify Docker daemon access as the runner account
+  become: true
+  become_user: "{{ verification_instance.user }}"
+  ansible.builtin.command:
+    argv: [docker, info, "--format", "{{ '{{' }}.ServerVersion{{ '}}' }}"]
+  environment:
+    PATH: "{{ verification_path | default('/usr/local/bin:/usr/bin:/bin') }}"
+    HOME: "{{ ansible_facts.getent_passwd[verification_instance.user][4] }}"
+  changed_when: false
+  when: docker_enabled | default(false) | bool
+  no_log: true
+
+- name: Verify libvirt access as the runner account
+  become: true
+  become_user: "{{ verification_instance.user }}"
+  ansible.builtin.command:
+    argv: [virsh, --connect, qemu:///system, list, --name]
+  environment:
+    PATH: "{{ verification_path | default('/usr/local/bin:/usr/bin:/bin') }}"
+    HOME: "{{ ansible_facts.getent_passwd[verification_instance.user][4] }}"
+  changed_when: false
+  when: virtualization_enabled | default(false) | bool
+  no_log: true
+
+- name: Assemble a version-only account inventory
+  ansible.builtin.set_fact:
+    verification_account_tools: >-
+      {{ verification_account_tools | default([]) +
+         [{'name': item.item.name,
+           'version': item.stdout | regex_search('(?<![0-9.])' ~ (item.item.version | regex_escape) ~ '(?![0-9.])'),
+           'source': item.item.source}] }}
+  loop: "{{ verification_version_results.results }}"
+  no_log: true
+
+- name: Append the verified account inventory
+  ansible.builtin.set_fact:
+    verification_inventory: >-
+      {{ verification_inventory + [{'instance': verification_instance.name,
+         'runner': {'version': verification_runner_version.stdout | trim,
+           'minimum_version': runner_version,
+           'source': 'https://github.com/actions/runner/releases/tag/v' ~ (verification_runner_version.stdout | trim)},
+         'tools': verification_account_tools | default([])}] }}
+    verification_account_tools: []
+  no_log: true

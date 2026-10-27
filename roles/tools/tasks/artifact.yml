@@ -1,0 +1,57 @@
+---
+# Input: tools_artifact {name, version, url, filename, archive, binary, checksum_url}.
+- name: Require a published or explicitly configured checksum
+  ansible.builtin.assert:
+    that:
+      - >-
+        tools_artifact.name in tools_artifact_sha256 or
+        tools_artifact.sha256 | default('') is match('^[a-fA-F0-9]{64}$') or
+        tools_artifact.checksum_url | length > 0
+    fail_msg: "Provide tools_artifact_sha256.{{ tools_artifact.name }}; no verified checksum source is configured."
+
+- name: Download exact official release and verify SHA256
+  ansible.builtin.get_url:
+    url: "{{ tools_artifact.url }}"
+    dest: "{{ tools_cache_dir }}/{{ tools_artifact.filename }}"
+    checksum: "sha256:{{ tools_artifact_sha256[tools_artifact.name] | default(tools_artifact.sha256 | default(tools_artifact.checksum_url, true), true) }}"
+    owner: root
+    group: root
+    mode: "0644"
+    timeout: 60
+  register: tools_artifact_download
+
+- name: Create version-specific extraction directory
+  ansible.builtin.file:
+    path: "{{ tools_cache_dir }}/{{ tools_artifact.name }}-{{ tools_artifact.version }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: tools_artifact.archive
+
+- name: Extract verified archive without running publisher scripts
+  ansible.builtin.unarchive:
+    src: "{{ tools_cache_dir }}/{{ tools_artifact.filename }}"
+    dest: "{{ tools_cache_dir }}/{{ tools_artifact.name }}-{{ tools_artifact.version }}"
+    remote_src: true
+    owner: root
+    group: root
+  when: tools_artifact.archive
+
+- name: Validate every executable conflict before replacing any executable
+  ansible.builtin.include_tasks: artifact-binary.yml
+  vars:
+    tools_artifact_validate_only: true
+  loop: "{{ tools_artifact.binaries | default([{'name': tools_artifact.name, 'source': tools_artifact.binary | default(tools_artifact.name)}]) }}"
+  loop_control:
+    loop_var: tools_artifact_binding
+    label: "{{ tools_artifact_binding.name }}"
+
+- name: Install each verified executable after all conflict checks pass
+  ansible.builtin.include_tasks: artifact-binary.yml
+  vars:
+    tools_artifact_validate_only: false
+  loop: "{{ tools_artifact.binaries | default([{'name': tools_artifact.name, 'source': tools_artifact.binary | default(tools_artifact.name)}]) }}"
+  loop_control:
+    loop_var: tools_artifact_binding
+    label: "{{ tools_artifact_binding.name }}"

@@ -1,0 +1,137 @@
+---
+- name: Validate Docker signing-key trust configuration
+  ansible.builtin.assert:
+    that:
+      - docker_apt_key_fingerprint is match('^[A-Fa-f0-9]{40}$')
+      - docker_apt_key_sha256 == '' or docker_apt_key_sha256 is match('^[A-Fa-f0-9]{64}$')
+  when: docker_package_source == 'upstream'
+
+- name: Create apt key directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: docker_package_source == 'upstream'
+
+- name: Download Docker public key to staging, not to the apt trust store
+  ansible.builtin.get_url:
+    url: "{{ docker_apt_key_url }}"
+    dest: "{{ tools_cache_dir }}/docker.asc"
+    checksum: "{{ ('sha256:' + docker_apt_key_sha256) if docker_apt_key_sha256 | length > 0 else omit }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: docker_package_source == 'upstream'
+
+- name: Create private signing-key inspection directory
+  ansible.builtin.file:
+    path: "{{ tools_cache_dir }}/gnupg"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when: docker_package_source == 'upstream'
+
+- name: Read the Docker key without importing it into a keyring
+  ansible.builtin.command:
+    argv:
+      - gpg
+      - --batch
+      - --no-options
+      - --with-colons
+      - --show-keys
+      - --fingerprint
+      - "{{ tools_cache_dir }}/docker.asc"
+  environment:
+    GNUPGHOME: "{{ tools_cache_dir }}/gnupg"
+  register: tools_docker_key
+  changed_when: false
+  check_mode: false
+  when: docker_package_source == 'upstream'
+
+- name: Verify the exact Docker primary signing-key fingerprint
+  ansible.builtin.assert:
+    that:
+      - >-
+        (tools_docker_key.stdout | regex_findall('(?m)^fpr:::::::::([A-Fa-f0-9]+):') | first | upper)
+        == (docker_apt_key_fingerprint | upper)
+      - tools_docker_key.stdout | regex_findall('(?m)^pub:') | length == 1
+    fail_msg: Downloaded Docker signing key does not match the pinned primary fingerprint.
+  when: docker_package_source == 'upstream'
+
+- name: Install verified Docker signing key
+  ansible.builtin.copy:
+    src: "{{ tools_cache_dir }}/docker.asc"
+    dest: /etc/apt/keyrings/runner-docker.asc
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  when: docker_package_source == 'upstream'
+
+- name: Configure official Docker apt source for the detected release
+  ansible.builtin.apt_repository:
+    repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/runner-docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_facts.distribution_release }} stable"
+    filename: runner-docker
+    state: present
+    update_cache: true
+  when: docker_package_source == 'upstream'
+
+- name: Resolve exact Docker packages from the selected native release source
+  ansible.builtin.include_tasks: docker-resolve.yml
+
+- name: Install the exact validated Docker and Compose apt packages
+  ansible.builtin.include_tasks: packages.yml
+  vars:
+    tools_requested_packages: "{{ tools_docker_exact_packages | unique | list }}"
+
+- name: Ensure Docker access group exists
+  ansible.builtin.group:
+    name: docker
+    state: present
+
+- name: Grant runner users Docker access without changing other memberships
+  ansible.builtin.user:
+    name: "{{ item.user }}"
+    groups: docker
+    append: true
+  loop: "{{ runner_instances }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Enable and start Docker without replacing its daemon configuration
+  ansible.builtin.systemd_service:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Verify installed Docker version
+  ansible.builtin.command:
+    argv: [/usr/bin/docker, --version]
+  register: tools_docker_runtime
+  changed_when: false
+  check_mode: false
+
+- name: Verify installed Compose version
+  ansible.builtin.command:
+    argv: [/usr/bin/docker, compose, version, --short]
+  register: tools_compose_runtime
+  changed_when: false
+  check_mode: false
+  when: docker_compose_enabled
+
+- name: Confirm the exact Docker release is active
+  ansible.builtin.assert:
+    that:
+      - tools_docker_runtime.stdout is search('version ' + (docker_version | regex_escape) + '[, ]')
+
+- name: Confirm the exact Compose release is active when enabled
+  ansible.builtin.assert:
+    that:
+      - >-
+        (tools_compose_runtime.stdout | trim | regex_replace('^v', '')) is match(
+        '^' + (docker_compose_version | regex_escape) +
+        ('([+]ds[0-9]+([-+~.][0-9A-Za-z.+~_-]+)?)?' if docker_package_source == 'ubuntu' else '') + '$')
+  when: docker_compose_enabled

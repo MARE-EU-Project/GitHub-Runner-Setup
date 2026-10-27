@@ -1,0 +1,155 @@
+---
+- name: Inspect runner registration and ownership
+  ansible.builtin.include_tasks: inspect.yml
+
+- name: Require complete managed registration
+  ansible.builtin.assert:
+    that:
+      - runner_marker.stat.exists
+      - runner_paths.results[1].stat.exists
+      - runner_paths.results[2].stat.exists
+      - not runner_reconfigure | bool
+      - runner_installed.stdout | trim is version(runner_version, '>=')
+      - runner_paths.results[0].stat.mode == '0700'
+    fail_msg: Runner is missing, incorrectly configured, outdated, or not privately installed.
+
+- name: Verify systemd is active and enabled without modifying it
+  ansible.builtin.command:
+    argv: [systemctl, show, "{{ runner_service_name }}", --property=ActiveState, --property=UnitFileState, --property=User, --property=Group, --property=Environment, --property=MainPID, --property=SupplementaryGroups]
+  register: runner_service_status
+  changed_when: false
+  check_mode: false
+
+- name: Assert nonroot persistent service configuration
+  ansible.builtin.assert:
+    that:
+      - "'ActiveState=active' in runner_service_status.stdout_lines"
+      - "'UnitFileState=enabled' in runner_service_status.stdout_lines"
+      - "('User=' ~ runner_instance.user) in runner_service_status.stdout_lines"
+      - "('Group=' ~ runner_instance.user) in runner_service_status.stdout_lines"
+      - "('PATH=' ~ runner_service_path) in runner_service_status.stdout"
+      - "('HOME=' ~ runner_home_root ~ '/' ~ runner_instance.user) in runner_service_status.stdout"
+      - "not (minikube_enabled | default(kubernetes_enabled | default(true)) | bool) or ('KUBECONFIG=' ~ runner_home_root ~ '/' ~ runner_instance.user ~ '/.config/runner-kubernetes/config') in runner_service_status.stdout"
+      - "not (virtualization_enabled | bool) or 'LIBVIRT_DEFAULT_URI=qemu:///system' in runner_service_status.stdout"
+      - "not (vagrant_libvirt_enabled | default(virtualization_enabled) | bool) or 'VAGRANT_DEFAULT_PROVIDER=libvirt' in runner_service_status.stdout"
+      - ((runner_service_status.stdout_lines | select('match', '^SupplementaryGroups=') | first | regex_replace('^SupplementaryGroups=', '')).split() | sort) == (runner_groups | sort)
+
+- name: Determine the active systemd process identity
+  ansible.builtin.set_fact:
+    runner_main_pid: "{{ (runner_service_status.stdout | regex_findall('(?m)^MainPID=([0-9]+)$') | first) | int }}"
+
+- name: Require a live runner service process
+  ansible.builtin.assert:
+    that:
+      - runner_main_pid | int > 0
+
+- name: Read the actual running service process permissions
+  become: true
+  ansible.builtin.slurp:
+    src: "/proc/{{ runner_main_pid }}/status"
+  register: runner_process_status
+
+- name: Check actual service process UID and supplementary groups
+  ansible.builtin.set_fact:
+    runner_process_uid: "{{ (runner_process_status.content | b64decode | regex_findall('(?m)^Uid:[ \\t]+([0-9]+)') | first) | int }}"
+    runner_process_gids: "{{ (runner_process_status.content | b64decode | regex_findall('(?m)^Groups:[ \\t]*(.*)$') | first).split() }}"
+
+- name: Require the running process to use the dedicated nonroot UID
+  ansible.builtin.assert:
+    that:
+      - runner_process_uid | int > 0
+      - runner_process_uid | int == ansible_facts.getent_passwd[runner_instance.user][1] | int
+
+- name: Read system group IDs for process permission verification
+  ansible.builtin.getent:
+    database: group
+  when: runner_groups | length > 0
+
+- name: Verify the running service actually inherited its required tool groups
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.getent_group[item][1] in runner_process_gids
+    fail_msg: The running service has stale supplementary groups; perform guarded maintenance.
+  loop: "{{ runner_groups }}"
+
+- name: Verify software as the nonroot service identity
+  become: true
+  become_user: "{{ runner_instance.user }}"
+  ansible.builtin.command:
+    argv: "{{ item }}"
+  environment:
+    HOME: "{{ runner_home_root }}/{{ runner_instance.user }}"
+    PATH: "{{ runner_service_path }}"
+  loop: "{{ [['id', '-u'], [runner_instance.install_dir ~ '/bin/Runner.Listener', '--version']] + ([['docker', '--version'], ['docker', 'ps', '--quiet']] if docker_enabled | bool else []) + ([['virsh', '--connect', 'qemu:///system', 'list', '--all'], ['test', '-r', '/dev/kvm'], ['test', '-w', '/dev/kvm']] if virtualization_enabled | bool else []) }}"
+  register: runner_tool_checks
+  changed_when: false
+  check_mode: false
+
+- name: Assert service software does not run as root
+  ansible.builtin.assert:
+    that:
+      - runner_tool_checks.results[0].stdout | int > 0
+
+- name: Inspect private runner files and directories
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - "{{ runner_instance.install_dir }}/.runner"
+    - "{{ runner_instance.install_dir }}/.credentials"
+    - "{{ runner_instance.install_dir }}/.credentials_rsaparams"
+    - "{{ runner_instance.install_dir }}/.path"
+    - "{{ runner_instance.work_dir }}"
+    - "{{ runner_home_root }}/{{ runner_instance.user }}"
+  register: runner_permission_checks
+  no_log: true
+
+- name: Assert credentials and workspace are private and owned by the runner
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - not item.stat.islnk
+      - item.stat.pw_name == runner_instance.user
+      - item.stat.mode in ['0600', '0700']
+  loop: "{{ runner_permission_checks.results }}"
+  no_log: true
+
+- name: Read local registered runner identity
+  become: true
+  ansible.builtin.slurp:
+    src: "{{ runner_instance.install_dir }}/.runner"
+  register: runner_verify_identity
+  no_log: true
+  when: github_api_token | default('') | length > 0
+
+- name: Validate local runner API identity
+  ansible.builtin.assert:
+    that:
+      - (runner_verify_identity.content | b64decode | from_json).agentId | string is match('^[1-9][0-9]*$')
+      - (runner_verify_identity.content | b64decode | from_json).agentName == runner_instance.name
+  no_log: true
+  when: github_api_token | default('') | length > 0
+
+- name: Optionally verify this exact registration through GitHub API
+  ansible.builtin.uri:
+    url: "{{ runner_api_url }}/orgs/{{ github_organization }}/actions/runners/{{ (runner_verify_identity.content | b64decode | from_json).agentId }}"
+    headers:
+      Authorization: "{{ ['Bearer', github_api_token] | join(' ') }}"
+      Accept: application/vnd.github+json
+      X-GitHub-Api-Version: '2022-11-28'
+    status_code: 200
+    return_content: true
+    unredirected_headers: [Authorization]
+  register: runner_verify_api
+  no_log: true
+  when: github_api_token | default('') | length > 0
+
+- name: Assert GitHub sees the intended online runner and labels
+  ansible.builtin.assert:
+    that:
+      - runner_verify_api.json.name == runner_instance.name
+      - runner_verify_api.json.status == 'online'
+      - runner_instance.labels | difference(runner_verify_api.json.labels | map(attribute='name') | list) | length == 0
+    fail_msg: GitHub registration is offline, has the wrong identity, or lacks requested labels.
+  when: github_api_token | default('') | length > 0

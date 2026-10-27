@@ -1,0 +1,33 @@
+---
+- name: Explicitly initialize owned Minikube profiles after tool installation
+  hosts: github_runners
+  gather_facts: true
+  any_errors_fatal: true
+  tasks:
+    - name: Load tool configuration without reinstalling tools
+      ansible.builtin.import_role:
+        name: tools
+        tasks_from: noop
+      tags: [always]
+
+    - name: Validate targets and configured identities
+      ansible.builtin.import_role:
+        name: preflight
+      tags: [always, preflight]
+
+    - name: Require deliberate initialization of installed Minikube
+      ansible.builtin.assert:
+        that:
+          - minikube_initialize | bool
+          - minikube_enabled | bool
+          - minikube_driver == 'docker'
+          - docker_enabled | bool
+        fail_msg: Enable minikube_initialize, Minikube, and Docker explicitly before using this playbook.
+      tags: [minikube]
+
+    - name: Initialize only owned profiles without reinstalling host tools
+      become: true
+      ansible.builtin.import_role:
+        name: tools
+        tasks_from: minikube
+      tags: [minikube]

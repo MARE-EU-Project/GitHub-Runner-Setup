@@ -1,0 +1,3 @@
+---
+# Only ansible.builtin modules are required; supplied by ansible-core 2.21.x.
+collections: []

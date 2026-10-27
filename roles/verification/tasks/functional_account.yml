@@ -1,0 +1,617 @@
+---
+- name: Resolve the functional test account
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ functional_instance.user }}"
+  no_log: true
+
+- name: Define the account home and owned Kubernetes configuration
+  ansible.builtin.set_fact:
+    functional_home: "{{ ansible_facts.getent_passwd[functional_instance.user][4] }}"
+    functional_uid: "{{ ansible_facts.getent_passwd[functional_instance.user][1] }}"
+    functional_kubeconfig: >-
+      {{ functional_instance.kubeconfig | default(
+         ansible_facts.getent_passwd[functional_instance.user][4] ~ '/.config/runner-kubernetes/config') }}
+    functional_minikube_profile: >-
+      {{ functional_instance.minikube_profile | default(
+         (minikube_profile | default('minikube')) ~
+         ('-' ~ functional_instance.name if runner_instances | length > 1 else '')) }}
+    functional_namespace_created: false
+    functional_active_kubeconfig: >-
+      {{ functional_instance.kubeconfig | default(
+         ansible_facts.getent_passwd[functional_instance.user][4] ~ '/.config/runner-kubernetes/config') }}
+    functional_helm_attempted: false
+    functional_compose_attempted: false
+    functional_docker_created: false
+    functional_vagrant_attempted: false
+  no_log: true
+
+- name: Validate explicit Kubernetes test scope
+  ansible.builtin.assert:
+    that:
+      - functional_kubeconfig is match('^/')
+      - functional_minikube_profile is match('^[a-z][a-z0-9-]{0,62}$')
+    fail_msg: Functional Kubernetes tests require an absolute owned kubeconfig path and an explicit Minikube profile.
+  when: functional_kubernetes_scope_enabled | bool
+  no_log: true
+
+- name: Run isolated functional tests and always clean up their resources
+  become: true
+  become_user: "{{ functional_instance.user }}"
+  environment:
+    PATH: "{{ verification_path | default('/usr/local/bin:/usr/bin:/bin') }}"
+    HOME: "{{ functional_home }}"
+    MINIKUBE_HOME: "{{ functional_home }}/.minikube"
+    KUBECONFIG: "{{ functional_active_kubeconfig }}"
+    VAGRANT_CHECKPOINT_DISABLE: "1"
+    VAGRANT_BOX_UPDATE_CHECK_DISABLE: "1"
+    LIBVIRT_DEFAULT_URI: qemu:///system
+    LC_ALL: C
+  no_log: true
+  block:
+    - name: Allocate a private workspace in the runner home
+      ansible.builtin.tempfile:
+        state: directory
+        path: "{{ functional_home }}"
+        prefix: .mare-verification-
+      register: functional_workspace
+
+    - name: Define unique resource names
+      ansible.builtin.set_fact:
+        functional_resource_name: "{{ functional_workspace.path | basename | lower | regex_replace('[^a-z0-9-]', '') }}"
+
+    - name: Define an isolated local alias for the pinned upstream box
+      ansible.builtin.set_fact:
+        functional_vagrant_box_alias: "{{ functional_resource_name }}-box"
+      when: functional_vagrant_runtime_enabled | bool
+
+    - name: Create a directly managed digest-pinned application container
+      ansible.builtin.command:
+        argv: [docker, create, --name, "{{ functional_resource_name }}-direct", "{{ functional_container_image }}"]
+      register: functional_docker_create
+      when: functional_docker_runtime_enabled | bool
+
+    - name: Track the directly created container only after successful creation
+      ansible.builtin.set_fact:
+        functional_docker_created: true
+      when: functional_docker_runtime_enabled | bool
+
+    - name: Start the directly created application container
+      ansible.builtin.command:
+        argv: [docker, start, "{{ functional_docker_create.stdout | trim }}"]
+      when: functional_docker_runtime_enabled | bool
+
+    - name: Verify the direct container is running and healthy when a healthcheck exists
+      ansible.builtin.command:
+        argv: [docker, inspect, --format, "{{ '{{' }}json .State{{ '}}' }}", "{{ functional_docker_create.stdout | trim }}"]
+      register: functional_docker_state
+      changed_when: false
+      retries: 24
+      delay: 5
+      until:
+        - functional_docker_state.rc == 0
+        - (functional_docker_state.stdout | from_json).Running | bool
+        - (functional_docker_state.stdout | from_json).get('Health', {}).get('Status', 'healthy') == 'healthy'
+      when: functional_docker_runtime_enabled | bool
+
+    - name: Write a minimal Compose application
+      ansible.builtin.copy:
+        dest: "{{ functional_workspace.path }}/compose.yml"
+        mode: "0600"
+        content: |
+          services:
+            application:
+              image: {{ functional_container_image | to_json }}
+      when: functional_compose_runtime_enabled | bool
+
+    - name: Mark the Compose project for cleanup before creation
+      ansible.builtin.set_fact:
+        functional_compose_attempted: true
+      when: functional_compose_runtime_enabled | bool
+
+    - name: Start and verify the isolated Compose application
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - --project-name
+          - "{{ functional_resource_name }}"
+          - --file
+          - "{{ functional_workspace.path }}/compose.yml"
+          - up
+          - --detach
+          - --wait
+          - --wait-timeout
+          - "120"
+      when: functional_compose_runtime_enabled | bool
+
+    - name: Verify the explicitly owned kubeconfig file
+      ansible.builtin.stat:
+        path: "{{ functional_kubeconfig }}"
+        follow: false
+      register: functional_kubeconfig_stat
+      when: functional_kubernetes_scope_enabled | bool
+
+    - name: Resolve the root-owned profile ownership marker
+      ansible.builtin.command:
+        argv: [readlink, -e, --, "/var/lib/runner-tools/minikube/{{ functional_instance.user }}/{{ functional_minikube_profile }}.json"]
+      register: functional_marker_path
+      changed_when: false
+      when: functional_kubernetes_scope_enabled | bool
+
+    - name: Reject symlinked ownership marker paths
+      ansible.builtin.assert:
+        that:
+          - functional_marker_path.stdout == '/var/lib/runner-tools/minikube/' ~ functional_instance.user ~ '/' ~ functional_minikube_profile ~ '.json'
+      when: functional_kubernetes_scope_enabled | bool
+
+    - name: Inspect root-controlled ownership records
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop:
+        - /var/lib/runner-tools/minikube
+        - "/var/lib/runner-tools/minikube/{{ functional_instance.user }}"
+        - "{{ functional_marker_path.stdout | default('') }}"
+      register: functional_marker_stats
+      when: functional_kubernetes_scope_enabled | bool
+
+    - name: Require immutable root-owned profile records and parent directories
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.uid == 0
+          - not (item.stat.islnk | default(false))
+          - item.stat.mode == ('0644' if item.stat.isreg | default(false) else '0755')
+      loop: "{{ functional_marker_stats.results | default([]) }}"
+      when: functional_kubernetes_scope_enabled | bool
+
+    - name: Require regular ownership metadata beneath real directories
+      ansible.builtin.assert:
+        that:
+          - functional_marker_stats.results[0].stat.isdir
+          - functional_marker_stats.results[1].stat.isdir
+          - functional_marker_stats.results[2].stat.isreg
+      when: functional_kubernetes_scope_enabled | bool
+
+    - name: Read the root-owned profile identity
+      ansible.builtin.slurp:
+        src: "{{ functional_marker_path.stdout }}"
+      register: functional_marker
+      when: functional_kubernetes_scope_enabled | bool
+
+    - name: Require the exact managed profile identity
+      ansible.builtin.assert:
+        that:
+          - >-
+            functional_marker.content | b64decode | from_json ==
+            {'schema': 1, 'runner': functional_instance.name,
+             'user': functional_instance.user, 'profile': functional_minikube_profile,
+             'driver': minikube_driver, 'kubernetes_version': kubernetes_version,
+             'cpus': minikube_cpus | int, 'memory_mb': minikube_memory_mb | int}
+      when: functional_kubernetes_scope_enabled | bool
+
+    - name: Require a regular kubeconfig owned by this account
+      ansible.builtin.assert:
+        that:
+          - functional_kubeconfig_stat.stat.isreg | default(false)
+          - functional_kubeconfig_stat.stat.uid | default(-1) | int == functional_uid | int
+          - not (functional_kubeconfig_stat.stat.islnk | default(false))
+      when: functional_kubernetes_scope_enabled | bool
+
+    - name: Snapshot the owned kubeconfig to avoid concurrent context changes
+      ansible.builtin.copy:
+        src: "{{ functional_kubeconfig }}"
+        dest: "{{ functional_workspace.path }}/kubeconfig"
+        remote_src: true
+        mode: "0600"
+      when: functional_kubernetes_scope_enabled | bool
+
+    - name: Use only the private kubeconfig snapshot for runtime operations
+      ansible.builtin.set_fact:
+        functional_active_kubeconfig: "{{ functional_workspace.path }}/kubeconfig"
+      when: functional_kubernetes_scope_enabled | bool
+
+    - name: Read the current Kubernetes context without exposing credentials
+      ansible.builtin.command:
+        argv: [kubectl, config, view, --minify, --output=json]
+      register: functional_context
+      changed_when: false
+      when: functional_kubernetes_scope_enabled | bool
+
+    - name: Copy the context for independent profile endpoint resolution
+      ansible.builtin.copy:
+        src: "{{ functional_active_kubeconfig }}"
+        dest: "{{ functional_workspace.path }}/profile-kubeconfig"
+        remote_src: true
+        mode: "0600"
+      when: functional_kubernetes_scope_enabled | bool
+
+    - name: Resolve the actual profile endpoint including Docker mapped ports
+      ansible.builtin.command:
+        argv: [minikube, --profile, "{{ functional_minikube_profile }}", update-context]
+      environment:
+        KUBECONFIG: "{{ functional_workspace.path }}/profile-kubeconfig"
+      when: functional_kubernetes_scope_enabled | bool
+
+    - name: Read the independently resolved profile context
+      ansible.builtin.command:
+        argv: [kubectl, --kubeconfig, "{{ functional_workspace.path }}/profile-kubeconfig", config, view, --minify, --output=json]
+      register: functional_profile_context
+      changed_when: false
+      when: functional_kubernetes_scope_enabled | bool
+
+    - name: Read the selected Minikube profile health
+      ansible.builtin.command:
+        argv: [minikube, --profile, "{{ functional_minikube_profile }}", status, --output=json]
+      register: functional_minikube_status
+      changed_when: false
+      when: functional_kubernetes_scope_enabled | bool
+
+    - name: Confirm the context and server belong to the selected running Minikube profile
+      ansible.builtin.assert:
+        that:
+          - (functional_context.stdout | from_json)['current-context'] == functional_minikube_profile
+          - (functional_context.stdout | from_json).contexts[0].context.cluster == functional_minikube_profile
+          - (functional_context.stdout | from_json).clusters[0].cluster.server == (functional_profile_context.stdout | from_json).clusters[0].cluster.server
+          - (functional_minikube_status.stdout | from_json).Host == 'Running'
+          - (functional_minikube_status.stdout | from_json).APIServer == 'Running'
+      when: functional_kubernetes_scope_enabled | bool
+
+    - name: Read the actual Kubernetes server version from the verified profile
+      ansible.builtin.command:
+        argv: [kubectl, version, --output=json]
+      register: functional_kubernetes_version
+      changed_when: false
+      when: functional_kubernetes_scope_enabled | bool
+
+    - name: Require the pinned Kubernetes server version
+      ansible.builtin.assert:
+        that:
+          - (functional_kubernetes_version.stdout | from_json).serverVersion.gitVersion == 'v' ~ kubernetes_version
+      when: functional_kubernetes_scope_enabled | bool
+
+    - name: Create only this test's isolated namespace
+      ansible.builtin.command:
+        argv: [kubectl, create, namespace, "{{ functional_resource_name }}"]
+      when: functional_kubernetes_scope_enabled | bool
+
+    - name: Track ownership only after successful namespace creation
+      ansible.builtin.set_fact:
+        functional_namespace_created: true
+      when: functional_kubernetes_scope_enabled | bool
+
+    - name: Write an isolated Kubernetes application
+      ansible.builtin.copy:
+        dest: "{{ functional_workspace.path }}/deployment.yml"
+        mode: "0600"
+        content: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: application
+            namespace: {{ functional_resource_name }}
+          spec:
+            replicas: 1
+            selector:
+              matchLabels: {app: mare-functional}
+            template:
+              metadata:
+                labels: {app: mare-functional}
+              spec:
+                containers:
+                  - name: application
+                    image: {{ functional_container_image | to_json }}
+      when: functional_kubernetes_runtime_enabled | bool
+
+    - name: Deploy the pinned application in the isolated namespace
+      ansible.builtin.command:
+        argv: [kubectl, apply, --filename, "{{ functional_workspace.path }}/deployment.yml"]
+      when: functional_kubernetes_runtime_enabled | bool
+
+    - name: Verify Kubernetes application readiness
+      ansible.builtin.command:
+        argv: [kubectl, --namespace, "{{ functional_resource_name }}", rollout, status, deployment/application, --timeout=120s]
+      when: functional_kubernetes_runtime_enabled | bool
+
+    - name: Create a private local Helm chart directory
+      ansible.builtin.file:
+        path: "{{ functional_workspace.path }}/chart/templates"
+        state: directory
+        mode: "0700"
+      when: functional_helm_runtime_enabled | bool
+
+    - name: Write minimal local Helm chart metadata
+      ansible.builtin.copy:
+        dest: "{{ functional_workspace.path }}/chart/Chart.yaml"
+        mode: "0600"
+        content: |
+          apiVersion: v2
+          name: mare-functional
+          version: 0.1.0
+      when: functional_helm_runtime_enabled | bool
+
+    - name: Write the pinned Helm application template
+      ansible.builtin.copy:
+        dest: "{{ functional_workspace.path }}/chart/templates/deployment.yaml"
+        mode: "0600"
+        content: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: helm-application
+          spec:
+            replicas: 1
+            selector:
+              matchLabels: {app: mare-helm-functional}
+            template:
+              metadata:
+                labels: {app: mare-helm-functional}
+              spec:
+                containers:
+                  - name: application
+                    image: {{ functional_container_image | to_json }}
+      when: functional_helm_runtime_enabled | bool
+
+    - name: Track the isolated Helm release before installation
+      ansible.builtin.set_fact:
+        functional_helm_attempted: true
+      when: functional_helm_runtime_enabled | bool
+
+    - name: Install and verify the local Helm chart
+      ansible.builtin.command:
+        argv: [helm, install, "{{ functional_resource_name }}", "{{ functional_workspace.path }}/chart", --namespace, "{{ functional_resource_name }}", --wait, --timeout, 120s]
+      when: functional_helm_runtime_enabled | bool
+
+    - name: Require an existing approved libvirt storage pool
+      ansible.builtin.command:
+        argv: [virsh, --connect, qemu:///system, pool-info, --pool, "{{ functional_vagrant_storage_pool | default('default') }}"]
+      register: functional_vagrant_pool
+      changed_when: false
+      failed_when: >-
+        functional_vagrant_pool.rc != 0 or
+        functional_vagrant_pool.stdout is not search('(?m)^State:[ ]+running[ ]*$')
+      when: functional_vagrant_runtime_enabled | bool
+
+    - name: Create isolated Vagrant metadata and box storage
+      ansible.builtin.file:
+        path: "{{ functional_workspace.path }}/vagrant-home"
+        state: directory
+        mode: "0700"
+      when: functional_vagrant_runtime_enabled | bool
+
+    - name: Copy the installed plugin registry into the isolated Vagrant home
+      ansible.builtin.copy:
+        src: "{{ functional_home }}/.vagrant.d/plugins.json"
+        dest: "{{ functional_workspace.path }}/vagrant-home/plugins.json"
+        remote_src: true
+        mode: "0600"
+      when: functional_vagrant_runtime_enabled | bool
+
+    - name: Copy installed plugin gems without sharing writable plugin state
+      ansible.builtin.copy:
+        src: "{{ functional_home }}/.vagrant.d/gems/"
+        dest: "{{ functional_workspace.path }}/vagrant-home/gems/"
+        remote_src: true
+        mode: preserve
+        directory_mode: "0700"
+      when: functional_vagrant_runtime_enabled | bool
+
+    - name: Verify the exact plugin version in the isolated Vagrant home
+      ansible.builtin.command:
+        argv: [vagrant, plugin, list]
+        chdir: "{{ functional_workspace.path }}"
+      environment:
+        VAGRANT_HOME: "{{ functional_workspace.path }}/vagrant-home"
+      register: functional_vagrant_plugins
+      changed_when: false
+      failed_when: >-
+        functional_vagrant_plugins.rc != 0 or
+        functional_vagrant_plugins.stdout is not search(
+          '(?m)^vagrant-libvirt \(' ~ (vagrant_libvirt_version | regex_escape) ~ '[,)]')
+      when: functional_vagrant_runtime_enabled | bool
+
+    - name: Write an exact-version box catalog with an explicit provider checksum
+      ansible.builtin.copy:
+        dest: "{{ functional_workspace.path }}/box-catalog.json"
+        mode: "0600"
+        content: >-
+          {{ {'name': functional_vagrant_box_alias,
+              'description': 'Isolated alias of pinned upstream box ' ~ functional_vagrant_box_name,
+              'versions': [{'version': functional_vagrant_box_version | string,
+                'providers': [{'name': 'libvirt', 'url': functional_vagrant_box_url,
+                  'checksum_type': 'sha256', 'checksum': functional_vagrant_box_sha256}]}]} | to_nice_json }}
+      when: functional_vagrant_runtime_enabled | bool
+
+    - name: Write a checksum-pinned private libvirt Vagrant environment
+      ansible.builtin.copy:
+        dest: "{{ functional_workspace.path }}/Vagrantfile"
+        mode: "0600"
+        content: |
+          Vagrant.configure("2") do |config|
+            config.vm.box = {{ functional_vagrant_box_alias | to_json }}
+            config.vm.box_version = {{ functional_vagrant_box_version | string | to_json }}
+            config.vm.box_url = {{ ('file://' ~ functional_workspace.path ~ '/box-catalog.json') | to_json }}
+            config.vm.synced_folder ".", "/vagrant", disabled: true
+            config.vm.provider :libvirt do |libvirt|
+              libvirt.uri = "qemu:///system"
+              libvirt.default_prefix = {{ (functional_resource_name ~ '_') | to_json }}
+              libvirt.random_hostname = false
+              libvirt.storage_pool_name = {{ (functional_vagrant_storage_pool | default('default')) | to_json }}
+              libvirt.management_network_name = {{ (functional_resource_name ~ '-network') | to_json }}
+              libvirt.management_network_autostart = false
+              libvirt.management_network_keep = false
+              libvirt.memory = 512
+              libvirt.cpus = 1
+            end
+          end
+      when: functional_vagrant_runtime_enabled | bool
+
+    - name: Track the private Vagrant environment before boot
+      ansible.builtin.set_fact:
+        functional_vagrant_attempted: true
+      when: functional_vagrant_runtime_enabled | bool
+
+    - name: Boot the isolated libvirt VM
+      ansible.builtin.command:
+        argv: [vagrant, up, --provider=libvirt, --no-provision]
+        chdir: "{{ functional_workspace.path }}"
+      environment:
+        VAGRANT_HOME: "{{ functional_workspace.path }}/vagrant-home"
+        VAGRANT_DEFAULT_PROVIDER: libvirt
+      when: functional_vagrant_runtime_enabled | bool
+
+    - name: Verify the isolated VM can execute a command
+      ansible.builtin.command:
+        argv: [vagrant, ssh, --command, "printf mare-vagrant-ok"]
+        chdir: "{{ functional_workspace.path }}"
+      environment:
+        VAGRANT_HOME: "{{ functional_workspace.path }}/vagrant-home"
+        VAGRANT_DEFAULT_PROVIDER: libvirt
+      register: functional_vagrant_output
+      failed_when: functional_vagrant_output.rc != 0 or 'mare-vagrant-ok' not in functional_vagrant_output.stdout
+      when: functional_vagrant_runtime_enabled | bool
+
+    - name: Write a standalone WASI preview1 stdout module
+      ansible.builtin.copy:
+        dest: "{{ functional_workspace.path }}/smoke.wat"
+        mode: "0600"
+        content: |
+          (module
+            (import "wasi_snapshot_preview1" "fd_write"
+              (func $fd_write (param i32 i32 i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 16) "mare-wasi-ok\n")
+            (func (export "_start")
+              (i32.store (i32.const 0) (i32.const 16))
+              (i32.store (i32.const 4) (i32.const 13))
+              (drop (call $fd_write
+                (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))))
+      when: functional_wasi_runtime_enabled | bool
+
+    - name: Execute the WASI module without granting host filesystem access
+      ansible.builtin.command:
+        argv: [wasmtime, run, "{{ functional_workspace.path }}/smoke.wat"]
+      register: functional_wasi_output
+      changed_when: false
+      failed_when: functional_wasi_output.rc != 0 or functional_wasi_output.stdout != 'mare-wasi-ok'
+      when: functional_wasi_runtime_enabled | bool
+  always:
+    - name: Remove only the direct container created by this test
+      ansible.builtin.command:
+        argv: [docker, rm, --force, --volumes, "{{ functional_docker_create.stdout | trim }}"]
+      register: functional_docker_cleanup
+      failed_when: false
+      when: functional_docker_created | bool
+
+    - name: Remove only this test's Compose project and its volumes
+      ansible.builtin.command:
+        argv: [docker, compose, --project-name, "{{ functional_resource_name }}", --file, "{{ functional_workspace.path }}/compose.yml", down, --volumes, --remove-orphans, --timeout, "30"]
+      register: functional_compose_cleanup
+      failed_when: false
+      when: functional_compose_attempted | bool
+
+    - name: Remove only this test's Helm release
+      ansible.builtin.command:
+        argv: [helm, uninstall, "{{ functional_resource_name }}", --namespace, "{{ functional_resource_name }}", --ignore-not-found, --wait, --timeout, 120s]
+      register: functional_helm_cleanup
+      failed_when: false
+      when: functional_helm_attempted | bool
+
+    - name: Delete only the namespace successfully created by this test
+      ansible.builtin.command:
+        argv: [kubectl, delete, namespace, "{{ functional_resource_name }}", --ignore-not-found=true, --wait=true, --timeout=120s]
+      register: functional_namespace_cleanup
+      failed_when: false
+      when: functional_namespace_created | bool
+
+    - name: Destroy only this test's private Vagrant environment
+      ansible.builtin.command:
+        argv: [vagrant, destroy, --force]
+        chdir: "{{ functional_workspace.path }}"
+      environment:
+        VAGRANT_HOME: "{{ functional_workspace.path }}/vagrant-home"
+        VAGRANT_DEFAULT_PROVIDER: libvirt
+      register: functional_vagrant_cleanup
+      failed_when: false
+      when: functional_vagrant_attempted | bool
+
+    - name: Inspect domains after destroying the private Vagrant environment
+      ansible.builtin.command:
+        argv: [virsh, --connect, qemu:///system, list, --all, --name]
+      register: functional_vagrant_domains
+      changed_when: false
+      failed_when: false
+      when: functional_vagrant_attempted | bool
+
+    - name: Inspect networks after destroying the private Vagrant environment
+      ansible.builtin.command:
+        argv: [virsh, --connect, qemu:///system, net-list, --all, --name]
+      register: functional_vagrant_networks
+      changed_when: false
+      failed_when: false
+      when: functional_vagrant_attempted | bool
+
+    - name: Inspect volumes only in the approved storage pool
+      ansible.builtin.command:
+        argv: [virsh, --connect, qemu:///system, vol-list, --pool, "{{ functional_vagrant_storage_pool | default('default') }}", --name]
+      register: functional_vagrant_volumes
+      changed_when: false
+      failed_when: false
+      when: functional_vagrant_attempted | bool
+
+    - name: Remove only this test's uniquely aliased imported base images
+      ansible.builtin.command:
+        argv: [virsh, --connect, qemu:///system, vol-delete, --pool, "{{ functional_vagrant_storage_pool | default('default') }}", --vol, "{{ item }}"]
+      loop: >-
+        {{ functional_vagrant_volumes.stdout_lines | default([]) |
+           select('match', '^' ~ (functional_vagrant_box_alias | default('') | regex_escape) ~ '_vagrant_box_image_') | list }}
+      register: functional_vagrant_base_cleanup
+      failed_when: false
+      when:
+        - functional_vagrant_attempted | bool
+        - functional_vagrant_domains.rc | default(-1) == 0
+        - functional_vagrant_networks.rc | default(-1) == 0
+        - functional_vagrant_volumes.rc | default(-1) == 0
+        - (functional_resource_name ~ '_default') not in functional_vagrant_domains.stdout_lines
+        - (functional_resource_name ~ '-network') not in functional_vagrant_networks.stdout_lines
+
+    - name: Verify the approved pool contains no remaining test volumes
+      ansible.builtin.command:
+        argv: [virsh, --connect, qemu:///system, vol-list, --pool, "{{ functional_vagrant_storage_pool | default('default') }}", --name]
+      register: functional_vagrant_final_volumes
+      changed_when: false
+      failed_when: false
+      when: functional_vagrant_attempted | bool
+
+    - name: Preserve recovery metadata if runtime cleanup failed
+      ansible.builtin.assert:
+        that:
+          - not (functional_docker_created | bool) or functional_docker_cleanup.rc | default(-1) == 0
+          - not (functional_compose_attempted | bool) or functional_compose_cleanup.rc | default(-1) == 0
+          - not (functional_helm_attempted | bool) or functional_helm_cleanup.rc | default(-1) == 0
+          - not (functional_namespace_created | bool) or functional_namespace_cleanup.rc | default(-1) == 0
+          - not (functional_vagrant_attempted | bool) or functional_vagrant_cleanup.rc | default(-1) == 0
+          - >-
+            not (functional_vagrant_attempted | bool) or
+            (functional_vagrant_domains.rc | default(-1) == 0 and
+             (functional_resource_name ~ '_default') not in functional_vagrant_domains.stdout_lines)
+          - >-
+            not (functional_vagrant_attempted | bool) or
+            (functional_vagrant_networks.rc | default(-1) == 0 and
+             (functional_resource_name ~ '-network') not in functional_vagrant_networks.stdout_lines)
+          - >-
+            not (functional_vagrant_attempted | bool) or
+            (functional_vagrant_final_volumes.rc | default(-1) == 0 and
+             functional_vagrant_final_volumes.stdout_lines |
+               select('match', '^' ~ (functional_resource_name | regex_escape) ~ '_default') | list | length == 0 and
+             functional_vagrant_final_volumes.stdout_lines |
+               select('match', '^' ~ (functional_vagrant_box_alias | regex_escape) ~ '_vagrant_box_image_') | list | length == 0)
+        fail_msg: Functional cleanup failed; private workspace retained for targeted administrator recovery.
+      no_log: false
+
+    - name: Remove this test's private workspace
+      ansible.builtin.file:
+        path: "{{ functional_workspace.path }}"
+        state: absent
+      when: functional_workspace.path is defined

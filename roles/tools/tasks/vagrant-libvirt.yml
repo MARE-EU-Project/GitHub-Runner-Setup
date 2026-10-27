@@ -1,0 +1,58 @@
+---
+- name: Install checked libvirt plugin build prerequisites
+  ansible.builtin.include_tasks: packages.yml
+  vars:
+    tools_requested_packages: "{{ tools_ubuntu_packages[ansible_facts.distribution_release].vagrant_libvirt_build }}"
+
+- name: Download the exact plugin gem and verify the published release SHA256
+  ansible.builtin.get_url:
+    url: "https://rubygems.org/downloads/vagrant-libvirt-{{ vagrant_libvirt_version }}.gem"
+    dest: "{{ tools_cache_dir }}/vagrant-libvirt-{{ vagrant_libvirt_version }}.gem"
+    checksum: "sha256:{{ vagrant_libvirt_gem_sha256 }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: vagrant_libvirt_gems | length == 0
+
+- name: Create immutable manifest-specific local gem source
+  ansible.builtin.set_fact:
+    tools_vagrant_gem_source: "{{ tools_cache_dir }}/vagrant-gems-{{ vagrant_libvirt_gems | to_json | hash('sha256') }}"
+  when: vagrant_libvirt_gems | length > 0
+
+- name: Create the local gem source directory
+  ansible.builtin.file:
+    path: "{{ tools_vagrant_gem_source }}/gems"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: vagrant_libvirt_gems | length > 0
+
+- name: Download only the explicitly locked plugin gems
+  ansible.builtin.get_url:
+    url: "https://rubygems.org/downloads/{{ item.name }}-{{ item.version }}.gem"
+    dest: "{{ tools_vagrant_gem_source }}/gems/{{ item.name }}-{{ item.version }}.gem"
+    checksum: "sha256:{{ item.sha256 }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ vagrant_libvirt_gems }}"
+  loop_control:
+    label: "{{ item.name }}={{ item.version }}"
+  when: vagrant_libvirt_gems | length > 0
+
+- name: Index only the verified locked gems without installing any gems
+  ansible.builtin.command:
+    argv: [/opt/vagrant/embedded/bin/gem, generate_index, --directory, "{{ tools_vagrant_gem_source }}"]
+    creates: "{{ tools_vagrant_gem_source }}/specs.4.8.gz"
+  environment:
+    HOME: "{{ tools_cache_dir }}"
+    TMPDIR: "{{ tools_cache_dir }}"
+  when: vagrant_libvirt_gems | length > 0
+
+- name: Install and verify the exact plugin in each runner's own Vagrant home
+  ansible.builtin.include_tasks: vagrant-user.yml
+  loop: "{{ runner_instances }}"
+  loop_control:
+    loop_var: tools_runner
+    label: "{{ tools_runner.user }}"

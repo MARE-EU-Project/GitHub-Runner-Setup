@@ -1,0 +1,78 @@
+---
+- name: Inspect the shared root-controlled dedicated-account marker
+  ansible.builtin.stat:
+    path: "{{ runner_state_dir }}/accounts/{{ tools_runner.user }}.json"
+    follow: false
+  register: tools_account_marker
+
+- name: Require a trusted account ownership record before reading it
+  ansible.builtin.assert:
+    that:
+      - >-
+        not tools_account_marker.stat.exists or
+        (tools_account_marker.stat.isreg | default(false) and
+        not (tools_account_marker.stat.islnk | default(false)) and
+        tools_account_marker.stat.uid == 0 and tools_account_marker.stat.mode == '0600')
+    fail_msg: Refusing an untrusted dedicated-account ownership record.
+
+- name: Read an existing trusted dedicated-account marker
+  ansible.builtin.slurp:
+    src: "{{ runner_state_dir }}/accounts/{{ tools_runner.user }}.json"
+  register: tools_account_marker_content
+  when: tools_account_marker.stat.exists
+
+- name: Define the account ownership contract shared with the runner role
+  ansible.builtin.set_fact:
+    tools_account_desired:
+      name: "{{ tools_runner.name }}"
+      user: "{{ tools_runner.user }}"
+      home: "/home/{{ tools_runner.user }}"
+      install_dir: "{{ tools_runner.install_dir }}"
+
+- name: Refuse a dedicated-account marker for a different runner identity
+  ansible.builtin.assert:
+    that:
+      - tools_account_marker_content.content | b64decode | from_json == tools_account_desired
+    fail_msg: The existing account ownership record belongs to a different runner configuration.
+  when: tools_account_marker.stat.exists
+
+- name: Inspect the dedicated account immediately before provisioning
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ tools_runner.user }}"
+    fail_key: false
+  register: tools_account_passwd
+
+- name: Inspect the dedicated primary group immediately before provisioning
+  ansible.builtin.getent:
+    database: group
+    key: "{{ tools_runner.user }}"
+    fail_key: false
+  register: tools_account_group
+
+- name: Inspect the dedicated home without following symlinks
+  ansible.builtin.stat:
+    path: "/home/{{ tools_runner.user }}"
+    follow: false
+  register: tools_account_home
+
+- name: Refuse adoption of unowned accounts, groups, or home directories
+  ansible.builtin.assert:
+    that:
+      - tools_account_marker.stat.exists or tools_account_passwd.ansible_facts.getent_passwd[tools_runner.user] is none
+      - tools_account_marker.stat.exists or tools_account_group.ansible_facts.getent_group[tools_runner.user] is none
+      - tools_account_marker.stat.exists or not tools_account_home.stat.exists
+      - not tools_account_home.stat.exists or (tools_account_home.stat.isdir and not tools_account_home.stat.islnk)
+    fail_msg: >-
+      An existing account, group, or home for {{ tools_runner.user }} is not owned
+      by this deployment. Nothing is adopted or changed. Choose a fresh dedicated
+      user or restore its verified root-controlled ownership record.
+
+- name: Reserve the exact account identity before user creation for safe retries
+  ansible.builtin.copy:
+    content: "{{ tools_account_desired | to_nice_json }}\n"
+    dest: "{{ runner_state_dir }}/accounts/{{ tools_runner.user }}.json"
+    owner: root
+    group: root
+    mode: "0600"
+  when: tools_account_reserve | default(true)

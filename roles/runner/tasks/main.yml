@@ -1,0 +1,40 @@
+---
+- name: Validate requested runner configuration
+  ansible.builtin.import_tasks: validate.yml
+
+- name: Install runner runtime dependencies
+  become: true
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - tar
+      - gzip
+      - acl
+      - libicu-dev
+      - libssl-dev
+      - libkrb5-3
+      - zlib1g
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create root-controlled runner state directories
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - "{{ runner_state_dir }}"
+    - "{{ runner_state_dir }}/accounts"
+    - "{{ runner_cache_dir }}"
+
+- name: Configure isolated runners
+  ansible.builtin.include_tasks: instance.yml
+  loop: "{{ runner_instances }}"
+  loop_control:
+    loop_var: runner_instance
+    label: "{{ runner_instance.name }}"

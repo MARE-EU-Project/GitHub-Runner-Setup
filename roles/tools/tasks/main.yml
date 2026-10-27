@@ -1,0 +1,4 @@
+---
+- name: Provision tools within an explicitly elevated installation scope
+  ansible.builtin.import_tasks: install.yml
+  become: true

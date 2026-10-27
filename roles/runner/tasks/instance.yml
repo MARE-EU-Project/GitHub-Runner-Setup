@@ -1,0 +1,278 @@
+---
+- name: Inspect instance before making changes
+  ansible.builtin.include_tasks: inspect.yml
+
+- name: Detect service configuration changes without writing
+  become: true
+  ansible.builtin.template:
+    src: runner.service.j2
+    dest: "/etc/systemd/system/{{ runner_service_name }}"
+    owner: root
+    group: root
+    mode: '0644'
+  check_mode: true
+  register: runner_unit_preview
+
+- name: Inspect current account group memberships
+  ansible.builtin.command:
+    argv: [id, -nG, "{{ runner_instance.user }}"]
+  register: runner_current_groups
+  changed_when: false
+  check_mode: false
+  when: runner_marker.stat.exists
+
+- name: Determine whether maintenance is necessary
+  ansible.builtin.set_fact:
+    runner_group_change: "{{ runner_marker.stat.exists and ((runner_current_groups.stdout | default('')).split() | difference([runner_instance.user]) | sort) != (runner_groups | sort) }}"
+
+- name: Require explicit authorization to change existing registration
+  ansible.builtin.assert:
+    that:
+      - not runner_reconfigure | bool or runner_allow_reconfigure | bool
+    fail_msg: Registration settings changed; explicit runner_allow_reconfigure and maintenance confirmation are required.
+
+- name: Require maintenance approval before scheduling existing-service changes
+  ansible.builtin.assert:
+    that:
+      - runner_maintenance_confirmed | bool
+    fail_msg: Drain the runner and confirm maintenance before changing an existing service.
+  when:
+    - runner_paths.results[2].stat.exists or runner_paths.results[1].stat.exists
+    - runner_reconfigure | bool or runner_upgrade | bool or runner_unit_preview.changed or runner_group_change | bool
+
+- name: Guard any existing-service interruption
+  ansible.builtin.include_tasks: maintenance.yml
+  when:
+    - ansible_check_mode
+    - runner_paths.results[2].stat.exists or runner_paths.results[1].stat.exists
+    - runner_reconfigure | bool or runner_upgrade | bool or runner_unit_preview.changed or runner_group_change | bool
+
+- name: Show safe check-mode plan
+  ansible.builtin.debug:
+    msg: "Runner {{ runner_instance.name }}: registration={{ 'reconfigure' if runner_reconfigure | bool else ('preserve' if runner_paths.results[1].stat.exists else 'create') }}, upgrade={{ runner_upgrade }}. No tokens minted or services changed in check mode."
+  when: ansible_check_mode
+
+- name: Apply runner configuration
+  when: not ansible_check_mode
+  block:
+    - name: Validate requested optional groups exist
+      ansible.builtin.getent:
+        database: group
+        key: "{{ item }}"
+      loop: "{{ runner_groups }}"
+
+    - name: Verify token availability before stopping or reconfiguring
+      ansible.builtin.assert:
+        that:
+          - github_api_token | default('') | length > 0 or runner_registration_token | default('') | length > 0
+          - not runner_reconfigure | bool or github_api_token | default('') | length > 0 or runner_removal_token | default('') | length > 0
+      no_log: true
+      when: not runner_paths.results[1].stat.exists or runner_reconfigure | bool
+
+    - name: Verify and stage pinned archive before any service interruption
+      ansible.builtin.include_tasks: archive.yml
+      when: not runner_marker.stat.exists or runner_upgrade | bool
+
+    - name: Confirm maintenance and check busy state immediately before stopping
+      ansible.builtin.include_tasks: maintenance.yml
+      when:
+        - runner_paths.results[2].stat.exists or runner_paths.results[1].stat.exists
+        - runner_reconfigure | bool or runner_upgrade | bool or runner_unit_preview.changed or runner_group_change | bool
+
+    - name: Stop only explicitly approved existing service changes
+      become: true
+      ansible.builtin.systemd_service:
+        name: "{{ runner_service_name }}"
+        state: stopped
+      when:
+        - runner_paths.results[2].stat.exists
+        - runner_reconfigure | bool or runner_upgrade | bool or runner_unit_preview.changed or runner_group_change | bool
+
+    - name: Reserve dedicated-account ownership before creating its identity
+      become: true
+      ansible.builtin.copy:
+        content: "{{ runner_account_desired | to_nice_json }}\n"
+        dest: "{{ runner_state_dir }}/accounts/{{ runner_instance.user }}.json"
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Create dedicated primary group
+      become: true
+      ansible.builtin.group:
+        name: "{{ runner_instance.user }}"
+        system: true
+
+    - name: Create nonroot dedicated service account and optional tool groups
+      become: true
+      ansible.builtin.user:
+        name: "{{ runner_instance.user }}"
+        group: "{{ runner_instance.user }}"
+        groups: "{{ runner_groups | join(',') }}"
+        append: false
+        home: "{{ runner_home_root }}/{{ runner_instance.user }}"
+        create_home: true
+        shell: /bin/bash
+        system: true
+        password_lock: true
+
+    - name: Verify the service identity is nonroot
+      ansible.builtin.command:
+        argv: [id, -u, "{{ runner_instance.user }}"]
+      register: runner_account_uid
+      changed_when: false
+      failed_when: runner_account_uid.stdout | int == 0
+
+    - name: Create private installation and home directories
+      become: true
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ runner_instance.user }}"
+        group: "{{ runner_instance.user }}"
+        mode: '0700'
+      loop:
+        - "{{ runner_instance.install_dir }}"
+        - "{{ runner_home_root }}/{{ runner_instance.user }}"
+
+    - name: Extract verified release without removing registration files
+      become: true
+      ansible.builtin.unarchive:
+        src: "{{ runner_cache_dir }}/{{ runner_archive_name }}"
+        dest: "{{ runner_instance.install_dir }}"
+        remote_src: true
+        owner: "{{ runner_instance.user }}"
+        group: "{{ runner_instance.user }}"
+        extra_opts:
+          - --no-same-owner
+      when: not runner_marker.stat.exists or runner_upgrade | bool
+
+    - name: Restore private install permissions after archive extraction
+      become: true
+      ansible.builtin.file:
+        path: "{{ runner_instance.install_dir }}"
+        state: directory
+        owner: "{{ runner_instance.user }}"
+        group: "{{ runner_instance.user }}"
+        mode: '0700'
+
+    - name: Create private work directory
+      become: true
+      ansible.builtin.file:
+        path: "{{ runner_instance.work_dir }}"
+        state: directory
+        owner: "{{ runner_instance.user }}"
+        group: "{{ runner_instance.user }}"
+        mode: '0700'
+
+    - name: Explicitly remove old registration before reconfiguration
+      ansible.builtin.include_tasks: unregister.yml
+      when: runner_reconfigure | bool
+
+    - name: Write root-controlled nonsecret ownership manifest
+      become: true
+      ansible.builtin.copy:
+        content: "{{ runner_desired | to_nice_json }}\n"
+        dest: "{{ runner_state_dir }}/{{ runner_instance.name }}.json"
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Obtain fresh registration token
+      ansible.builtin.include_tasks: token.yml
+      vars:
+        runner_token_action: registration
+        runner_token_organization: "{{ github_organization }}"
+      when: not runner_paths.results[1].stat.exists or runner_reconfigure | bool
+
+    - name: Register runner using masked environment input instead of process arguments
+      become: true
+      become_user: "{{ runner_instance.user }}"
+      ansible.builtin.shell:
+        cmd: >-
+          umask 077; exec ./config.sh --unattended
+          --url {{ (runner_github_url ~ '/' ~ github_organization) | quote }}
+          --name {{ runner_instance.name | quote }}
+          --runnergroup {{ github_runner_group | quote }}
+          --work {{ runner_instance.work_dir | quote }}
+          --labels {{ (runner_instance.labels | join(',')) | quote }}
+          {{ '--disableupdate' if runner_disable_update | bool else '' }}
+        chdir: "{{ runner_instance.install_dir }}"
+        executable: /bin/bash
+      environment:
+        HOME: "{{ runner_home_root }}/{{ runner_instance.user }}"
+        PATH: "{{ runner_service_path }}"
+        ACTIONS_RUNNER_INPUT_TOKEN: "{{ runner_fresh_token.json.token if github_api_token | default('') | length > 0 else runner_registration_token }}"
+      no_log: true
+      changed_when: true
+      when: not runner_paths.results[1].stat.exists or runner_reconfigure | bool
+
+    - name: Discover runner credential files
+      become: true
+      ansible.builtin.find:
+        paths: "{{ runner_instance.install_dir }}"
+        patterns: ['.runner', '.credentials*', '.env', '.path']
+        hidden: true
+        file_type: file
+      register: runner_private_files
+      no_log: true
+
+    - name: Inspect the service wrapper independently of registration state
+      become: true
+      ansible.builtin.stat:
+        path: "{{ runner_instance.install_dir }}/runsvc.sh"
+        follow: false
+      register: runner_wrapper
+
+    - name: Refuse a symlinked service wrapper
+      ansible.builtin.assert:
+        that:
+          - not runner_wrapper.stat.exists or not runner_wrapper.stat.islnk
+
+    - name: Install upstream service wrapper when missing or upgrading
+      become: true
+      ansible.builtin.copy:
+        src: "{{ runner_instance.install_dir }}/bin/runsvc.sh"
+        dest: "{{ runner_instance.install_dir }}/runsvc.sh"
+        remote_src: true
+        owner: "{{ runner_instance.user }}"
+        group: "{{ runner_instance.user }}"
+        mode: '0700'
+      when: not runner_wrapper.stat.exists or runner_upgrade | bool
+
+    - name: Keep upstream service PATH aligned with the systemd environment
+      become: true
+      ansible.builtin.copy:
+        content: "{{ runner_service_path }}\n"
+        dest: "{{ runner_instance.install_dir }}/.path"
+        owner: "{{ runner_instance.user }}"
+        group: "{{ runner_instance.user }}"
+        mode: '0600'
+
+    - name: Restrict runner-required credential files
+      become: true
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        owner: "{{ runner_instance.user }}"
+        group: "{{ runner_instance.user }}"
+        mode: '0600'
+      loop: "{{ runner_private_files.files }}"
+      no_log: true
+
+    - name: Install dedicated systemd unit
+      become: true
+      ansible.builtin.template:
+        src: runner.service.j2
+        dest: "/etc/systemd/system/{{ runner_service_name }}"
+        owner: root
+        group: root
+        mode: '0644'
+      register: runner_unit_written
+
+    - name: Enable and start this isolated runner
+      become: true
+      ansible.builtin.systemd_service:
+        name: "{{ runner_service_name }}"
+        enabled: true
+        state: started
+        daemon_reload: "{{ runner_unit_written.changed }}"

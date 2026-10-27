@@ -1,0 +1,33 @@
+[Unit]
+Description=MARE GitHub Actions runner {{ runner_instance.name }}
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User={{ runner_instance.user }}
+Group={{ runner_instance.user }}
+SupplementaryGroups={{ runner_groups | join(' ') }}
+WorkingDirectory={{ runner_instance.install_dir }}
+Environment="HOME={{ runner_home_root }}/{{ runner_instance.user }}"
+Environment="PATH={{ runner_service_path }}"
+{% if minikube_enabled | default(kubernetes_enabled | default(true)) | bool %}
+Environment="KUBECONFIG={{ runner_home_root }}/{{ runner_instance.user }}/.config/runner-kubernetes/config"
+Environment="MINIKUBE_PROFILE={{ runner_instance.minikube_profile | default((minikube_profile | default('minikube')) ~ ('-' ~ runner_instance.name if runner_instances | length > 1 else '')) }}"
+{% endif %}
+{% if virtualization_enabled | bool %}
+Environment="LIBVIRT_DEFAULT_URI=qemu:///system"
+{% endif %}
+{% if vagrant_libvirt_enabled | default(virtualization_enabled) | bool %}
+Environment="VAGRANT_DEFAULT_PROVIDER=libvirt"
+{% endif %}
+ExecStart={{ runner_instance.install_dir }}/runsvc.sh
+KillMode=process
+KillSignal=SIGTERM
+TimeoutStopSec=300
+Restart=on-failure
+RestartSec=10
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

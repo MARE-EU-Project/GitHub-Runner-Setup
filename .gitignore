@@ -1,0 +1,7 @@
+*.retry
+.ansible/
+.venv/
+__pycache__/
+inventory/production/
+vault.yml
+*.vault-password

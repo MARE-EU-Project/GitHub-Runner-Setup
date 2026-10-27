@@ -1,0 +1,147 @@
+name: Runner smoke verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_group:
+        description: Runner group authorized for this repository
+        type: string
+        default: ENG
+        required: true
+      runner_labels:
+        description: JSON array of labels used to select a dedicated smoke runner
+        type: string
+        default: '["self-hosted","linux","x64","mare-smoke"]'
+        required: true
+      runner_instance:
+        description: Optional assertion of the executing RUNNER_NAME (must match exactly)
+        type: string
+        default: ""
+      test_wasi:
+        description: Explicitly opt in to a local WASI stdout test (no host directory grants)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    timeout-minutes: 10
+    runs-on:
+      group: ${{ inputs.runner_group }}
+      labels: ${{ fromJSON(inputs.runner_labels) }}
+    steps:
+      - name: Verify installed tool versions without logging host details
+        shell: bash
+        env:
+          SELECTED_INSTANCE: ${{ inputs.runner_instance }}
+          TEST_WASI: ${{ inputs.test_wasi }}
+        run: |
+          set -euo pipefail
+          export PATH="/usr/local/bin:/usr/bin:/bin"
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          import tempfile
+          from pathlib import Path
+
+          commands = {
+              "docker": ["docker", "--version"],
+              "docker_compose": ["docker", "compose", "version", "--short"],
+              "kubectl": ["kubectl", "version", "--client=true", "--output=json"],
+              "minikube": ["minikube", "version", "--short"],
+              "helm": ["helm", "version", "--short"],
+              "vagrant": ["vagrant", "--version"],
+              "vagrant_libvirt": ["vagrant", "plugin", "list"],
+              "wasmtime": ["wasmtime", "--version"],
+          }
+
+          def execute(argv):
+              result = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+              if result.returncode:
+                  raise ValueError("A smoke command failed; output withheld to protect host details.")
+              return result.stdout.strip()
+
+          try:
+              inventory = json.loads(Path("/var/lib/mare-runner/versions.json").read_text())
+              entries = inventory["runners"]
+              selected = os.environ.get("SELECTED_INSTANCE", "")
+              running_name = os.environ.get("RUNNER_NAME", "")
+              if not re.fullmatch(r"[a-z][a-z0-9-]{0,40}", running_name):
+                  raise ValueError("No valid GitHub-provided runner identity.")
+              if selected and selected != running_name:
+                  raise ValueError("Selected instance does not match the executing runner.")
+              entries = [entry for entry in entries if entry["instance"] == running_name]
+              if len(entries) != 1:
+                  raise ValueError("No unique matching runner inventory entry.")
+              runner = entries[0]["runner"]
+              minimum = str(runner["minimum_version"])
+              if not re.fullmatch(r"\d+\.\d+\.\d+", minimum):
+                  raise ValueError("Invalid minimum runner version.")
+              installation = execute([
+                  "systemctl", "show", "mare-runner-" + running_name + ".service",
+                  "--property=WorkingDirectory", "--value",
+              ])
+              if not Path(installation).is_absolute():
+                  raise ValueError("Invalid root-controlled runner working directory.")
+              actual_runner = execute([str(Path(installation) / "bin" / "Runner.Listener"), "--version"])
+              if not re.fullmatch(r"\d+\.\d+\.\d+", actual_runner):
+                  raise ValueError("Invalid installed runner version.")
+              if tuple(map(int, actual_runner.split("."))) < tuple(map(int, minimum.split("."))):
+                  raise ValueError("Installed runner is below the required version floor.")
+              print("actions_runner: " + actual_runner + " verified")
+              tools = {}
+              for entry in entries:
+                  for tool in entry["tools"]:
+                      name, version = tool["name"], str(tool["version"])
+                      if name not in commands or not re.fullmatch(r"\d+\.\d+\.\d+", version):
+                          raise ValueError("Invalid software inventory.")
+                      if name in tools and tools[name] != version:
+                          raise ValueError("Conflicting configured tool versions.")
+                      tools[name] = version
+              if "docker_compose" in tools and "docker" not in tools:
+                  raise ValueError("Compose inventory requires Docker.")
+              for name, version in sorted(tools.items()):
+                  output = execute(commands[name])
+                  prefix = r"vagrant-libvirt \(" if name == "vagrant_libvirt" else r"(?<![\d.])v?"
+                  if not re.search(prefix + re.escape(version) + r"(?![\d.])", output):
+                      raise ValueError("Installed version mismatch for " + name)
+                  print(name + ": " + version + " verified")
+              for package in inventory.get("apt_packages", []):
+                  name, expected = package["name"], str(package["version"])
+                  source = package["source"]
+                  if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]*(?::[a-z0-9]+)?", name):
+                      raise ValueError("Invalid operating-system package name.")
+                  if not re.fullmatch(r"[A-Za-z0-9.+:~_-]+", expected) or source["manager"] != "apt":
+                      raise ValueError("Invalid operating-system package metadata.")
+                  actual = execute([
+                      "dpkg-query", "--show",
+                      "--showformat=${Version}\t${source:Package}\t${source:Version}", name,
+                  ]).split("\t")
+                  if actual != [expected, source["package"], str(source["version"])]:
+                      raise ValueError("Installed apt package or source version mismatch.")
+                  print(name + ": " + expected + " verified")
+              if os.environ.get("TEST_WASI") == "true":
+                  if "wasmtime" not in tools:
+                      raise ValueError("WASI testing requires an inventoried Wasmtime installation.")
+                  with tempfile.TemporaryDirectory(prefix=".mare-wasi-", dir=os.environ["GITHUB_WORKSPACE"]) as work:
+                      module = Path(work) / "smoke.wat"
+                      module.write_text('''(module
+                        (import "wasi_snapshot_preview1" "fd_write"
+                          (func $fd_write (param i32 i32 i32 i32) (result i32)))
+                        (memory (export "memory") 1)
+                        (data (i32.const 16) "mare-wasi-ok\\n")
+                        (func (export "_start")
+                          (i32.store (i32.const 0) (i32.const 16))
+                          (i32.store (i32.const 4) (i32.const 13))
+                          (drop (call $fd_write
+                            (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))))''')
+                      if execute(["wasmtime", "run", str(module)]) != "mare-wasi-ok":
+                          raise ValueError("WASI stdout verification failed.")
+                      print("WASI stdout verified")
+          except (ValueError, KeyError, OSError, subprocess.SubprocessError):
+              raise SystemExit("Smoke verification failed; inspect configuration privately on the runner.")
+          PY

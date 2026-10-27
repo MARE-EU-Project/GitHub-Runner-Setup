@@ -1,0 +1,144 @@
+---
+- name: Validate functional test authorization
+  ansible.builtin.assert:
+    that:
+      - not (functional_tests_enabled | default(false) | bool) or (functional_tests_confirmed | default(false) | bool)
+    fail_msg: Functional tests require both functional_tests_enabled and functional_tests_confirmed.
+
+- name: Validate the independently enabled Compose prerequisite
+  ansible.builtin.assert:
+    that:
+      - not (docker_compose_enabled | default(docker_enabled | default(false)) | bool) or (docker_enabled | default(false) | bool)
+    fail_msg: docker_compose_enabled requires docker_enabled.
+
+- name: Define the software verification catalog
+  ansible.builtin.set_fact:
+    verification_tools:
+      - name: docker
+        enabled: "{{ docker_enabled | default(false) | bool }}"
+        command: [docker, --version]
+        version: "{{ docker_version }}"
+        source: "{{ {'ubuntu': 'https://archive.ubuntu.com/ubuntu/', 'upstream': 'https://download.docker.com/linux/ubuntu/'}[docker_package_source | default('upstream')] }}"
+      - name: docker_compose
+        enabled: "{{ docker_compose_enabled | default(docker_enabled | default(false)) | bool }}"
+        command: [docker, compose, version, --short]
+        version: "{{ docker_compose_version }}"
+        source: "{{ {'ubuntu': 'https://archive.ubuntu.com/ubuntu/', 'upstream': 'https://download.docker.com/linux/ubuntu/'}[docker_package_source | default('upstream')] }}"
+      - name: kubectl
+        enabled: "{{ kubectl_enabled | default(kubernetes_enabled | default(false)) | bool }}"
+        command: [kubectl, version, --client=true, --output=json]
+        version: "{{ kubectl_version }}"
+        source: https://dl.k8s.io/
+      - name: minikube
+        enabled: "{{ minikube_enabled | default(kubernetes_enabled | default(false)) | bool }}"
+        command: [minikube, version, --short]
+        version: "{{ minikube_version }}"
+        source: https://storage.googleapis.com/minikube/releases/
+      - name: helm
+        enabled: "{{ helm_enabled | default(kubernetes_enabled | default(false)) | bool }}"
+        command: [helm, version, --short]
+        version: "{{ helm_version }}"
+        source: https://get.helm.sh/
+      - name: vagrant
+        enabled: "{{ vagrant_enabled | default(virtualization_enabled | default(false)) | bool }}"
+        command: [vagrant, --version]
+        version: "{{ vagrant_version }}"
+        source: https://releases.hashicorp.com/vagrant/
+      - name: vagrant_libvirt
+        enabled: "{{ vagrant_libvirt_enabled | default(vagrant_enabled | default(virtualization_enabled | default(false))) | bool }}"
+        command: [vagrant, plugin, list]
+        version: "{{ vagrant_libvirt_version }}"
+        source: https://rubygems.org/gems/vagrant-libvirt
+      - name: wasmtime
+        enabled: "{{ wasmtime_enabled | default(false) | bool }}"
+        command: [wasmtime, --version]
+        version: "{{ wasmtime_version }}"
+        source: https://github.com/bytecodealliance/wasmtime/releases
+    verification_inventory: []
+    verification_apt_inventory: []
+  no_log: true
+
+- name: Read actual installed QEMU and libvirt binary and source package versions
+  ansible.builtin.command:
+    expand_argument_vars: false
+    argv:
+      - dpkg-query
+      - --show
+      - '--showformat=${db:Status-Status}\t${binary:Package}\t${Version}\t${source:Package}\t${source:Version}\n'
+      - qemu*
+      - libvirt*
+  register: verification_apt_packages
+  changed_when: false
+  when: virtualization_enabled | default(false) | bool
+  no_log: true
+
+- name: Select the actual apt-managed Docker package identities
+  ansible.builtin.set_fact:
+    verification_docker_apt_names: >-
+      {{ ([verification_docker_package_names.engine, verification_docker_package_names.cli] +
+          ([verification_docker_package_names.compose] if docker_compose_enabled | default(docker_enabled) | bool else [])) |
+          unique | list }}
+  vars:
+    verification_docker_package_names: "{{ tools_ubuntu_packages[ansible_facts.distribution_release].docker[docker_package_source] }}"
+  when:
+    - docker_enabled | default(false) | bool
+  no_log: true
+
+- name: Read exact installed Docker and enabled Compose apt revisions and sources
+  ansible.builtin.command:
+    expand_argument_vars: false
+    argv: >-
+      {{ ['dpkg-query', '--show',
+          '--showformat=${db:Status-Status}\t${binary:Package}\t${Version}\t${source:Package}\t${source:Version}\n'] +
+          verification_docker_apt_names }}
+  register: verification_docker_apt_packages
+  changed_when: false
+  when:
+    - docker_enabled | default(false) | bool
+  no_log: true
+
+- name: Record only installed apt-managed package metadata
+  ansible.builtin.set_fact:
+    verification_apt_inventory: >-
+      {{ verification_apt_inventory + [{
+        'name': item.split()[1], 'version': item.split()[2],
+        'source': {'manager': 'apt', 'package': item.split()[3],
+          'version': item.split()[4]}}] }}
+  loop: "{{ (verification_apt_packages.stdout_lines | default([])) + (verification_docker_apt_packages.stdout_lines | default([])) }}"
+  when:
+    - item.split() | length == 5
+    - item.split()[0] == 'installed'
+  no_log: true
+
+- name: Verify each runner account
+  ansible.builtin.include_tasks: account.yml
+  loop: "{{ runner_instances }}"
+  loop_control:
+    loop_var: verification_instance
+    label: Runner account
+
+- name: Create the version inventory directory
+  become: true
+  ansible.builtin.file:
+    path: /var/lib/mare-runner
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Record installed versions and public upstream sources
+  become: true
+  ansible.builtin.copy:
+    dest: /var/lib/mare-runner/versions.json
+    content: "{{ {'schema_version': 1, 'runners': verification_inventory, 'apt_packages': verification_apt_inventory, 'docker_installation_method': 'apt', 'docker_package_source': docker_package_source | default('upstream')} | to_nice_json }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  no_log: true
+
+- name: Run explicitly authorized functional tests
+  ansible.builtin.include_tasks: functional.yml
+  when:
+    - functional_tests_enabled | default(false) | bool
+    - functional_tests_confirmed | default(false) | bool
+    - not ansible_check_mode

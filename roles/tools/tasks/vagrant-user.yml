@@ -1,0 +1,90 @@
+---
+- name: Create private per-user Vagrant state
+  ansible.builtin.file:
+    path: "/home/{{ tools_runner.user }}/.vagrant.d"
+    state: directory
+    owner: "{{ tools_runner.user }}"
+    group: "{{ tools_runner.user }}"
+    mode: "0700"
+
+- name: List existing plugins as the unprivileged runner
+  become: true
+  become_user: "{{ tools_runner.user }}"
+  ansible.builtin.command:
+    argv: [/usr/bin/vagrant, plugin, list]
+    chdir: "/home/{{ tools_runner.user }}"
+  environment:
+    HOME: "/home/{{ tools_runner.user }}"
+    VAGRANT_HOME: "/home/{{ tools_runner.user }}/.vagrant.d"
+    VAGRANT_CHECKPOINT_DISABLE: "1"
+    LIBVIRT_DEFAULT_URI: qemu:///system
+  register: tools_vagrant_plugins_before
+  changed_when: false
+  check_mode: false
+
+- name: Refuse implicit libvirt plugin upgrades
+  ansible.builtin.assert:
+    that:
+      - >-
+        not (tools_vagrant_plugins_before.stdout is search('(?m)^vagrant-libvirt ')) or
+        tools_vagrant_plugins_before.stdout is search('(?m)^vagrant-libvirt \(' + (vagrant_libvirt_version | regex_escape) + '[,)]') or
+        tool_allow_upgrades
+    fail_msg: Existing vagrant-libvirt differs from the requested release; set tool_allow_upgrades after review.
+
+- name: Preserve unrelated plugins rather than resolving their unpinned dependencies
+  ansible.builtin.assert:
+    that:
+      - >-
+        tools_vagrant_plugins_before.stdout is search('(?m)^vagrant-libvirt \(' + (vagrant_libvirt_version | regex_escape) + '[,)]') or
+        (tools_vagrant_plugins_before.stdout | regex_findall('(?m)^([a-zA-Z0-9_-]+) \(') |
+        reject('equalto', 'vagrant-libvirt') | list | length == 0)
+    fail_msg: >-
+      An existing unrelated Vagrant plugin could introduce remote dependency sources
+      into the resolver. Its state is preserved and this installation stops rather
+      than resolving unpinned dependencies. Review this user's existing plugins.
+  when: vagrant_libvirt_gems | length > 0
+
+- name: Install the exact verified libvirt plugin as its unprivileged runner
+  become: true
+  become_user: "{{ tools_runner.user }}"
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/vagrant
+      - plugin
+      - install
+      - "{{ 'vagrant-libvirt' if vagrant_libvirt_gems | length > 0 else tools_cache_dir + '/vagrant-libvirt-' + vagrant_libvirt_version + '.gem' }}"
+      - --plugin-version
+      - "{{ vagrant_libvirt_version }}"
+      - --plugin-clean-sources
+      - --plugin-source
+      - "{{ 'file://' + tools_vagrant_gem_source if vagrant_libvirt_gems | length > 0 else 'https://rubygems.org' }}"
+    chdir: "/home/{{ tools_runner.user }}"
+  environment:
+    HOME: "/home/{{ tools_runner.user }}"
+    VAGRANT_HOME: "/home/{{ tools_runner.user }}/.vagrant.d"
+    VAGRANT_CHECKPOINT_DISABLE: "1"
+    LIBVIRT_DEFAULT_URI: qemu:///system
+    TMPDIR: "/home/{{ tools_runner.user }}/.vagrant.d"
+  when: >-
+    not (tools_vagrant_plugins_before.stdout is search('(?m)^vagrant-libvirt \(' + (vagrant_libvirt_version | regex_escape) + '[,)]'))
+  changed_when: true
+
+- name: Verify libvirt plugin version after installation
+  become: true
+  become_user: "{{ tools_runner.user }}"
+  ansible.builtin.command:
+    argv: [/usr/bin/vagrant, plugin, list]
+    chdir: "/home/{{ tools_runner.user }}"
+  environment:
+    HOME: "/home/{{ tools_runner.user }}"
+    VAGRANT_HOME: "/home/{{ tools_runner.user }}/.vagrant.d"
+    VAGRANT_CHECKPOINT_DISABLE: "1"
+    LIBVIRT_DEFAULT_URI: qemu:///system
+  register: tools_vagrant_plugins_after
+  changed_when: false
+  check_mode: false
+
+- name: Require the requested plugin release
+  ansible.builtin.assert:
+    that:
+      - tools_vagrant_plugins_after.stdout is search('(?m)^vagrant-libvirt \(' + (vagrant_libvirt_version | regex_escape) + '[,)]')

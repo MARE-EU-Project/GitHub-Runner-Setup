@@ -1,0 +1,16 @@
+---
+- name: Select explicit per-release Docker package names
+  ansible.builtin.set_fact:
+    tools_docker_packages: "{{ tools_ubuntu_packages[ansible_facts.distribution_release].docker[docker_package_source] }}"
+    tools_docker_exact_packages: []
+
+- name: Resolve each distinct Docker package at its exact upstream version
+  ansible.builtin.include_tasks: docker-package.yml
+  loop: >-
+    {{ ([{'name': tools_docker_packages.engine, 'version': docker_version},
+    {'name': tools_docker_packages.cli, 'version': docker_version}] +
+    ([{'name': tools_docker_packages.compose, 'version': docker_compose_version}]
+    if docker_compose_enabled else [])) | unique(attribute='name') | list }}
+  loop_control:
+    loop_var: tools_docker_package
+    label: "{{ tools_docker_package.name }}={{ tools_docker_package.version }}"

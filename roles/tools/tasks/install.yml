@@ -1,0 +1,314 @@
+---
+- name: Require completed parent preflight before privileged provisioning
+  ansible.builtin.assert:
+    that:
+      - preflight_accounts is defined
+      - preflight_groups is defined
+      - ansible_facts.distribution == 'Ubuntu'
+      - ansible_facts.distribution_release in ['noble', 'resolute']
+      - ansible_facts.architecture == 'x86_64'
+    fail_msg: Run the preflight role before tools; no implicit duplicate preflight is executed.
+
+- name: Validate tool settings
+  ansible.builtin.assert:
+    that:
+      - tool_allow_upgrades is boolean
+      - minikube_initialize is boolean
+      - docker_compose_enabled is boolean
+      - kubectl_enabled is boolean
+      - minikube_enabled is boolean
+      - helm_enabled is boolean
+      - vagrant_enabled is boolean
+      - vagrant_libvirt_enabled is boolean
+      - not docker_compose_enabled or docker_enabled
+      - not vagrant_libvirt_enabled or (vagrant_enabled and virtualization_enabled)
+      - not minikube_initialize or (minikube_enabled and kubectl_enabled)
+      - docker_package_source in ['ubuntu', 'upstream']
+      - docker_package_sources_by_release is mapping
+      - docker_apt_version_overrides is mapping
+      - docker_apt_version_overrides.get(ansible_facts.distribution_release, {}) is mapping
+      - wasmtime_release_sha256 is mapping
+      - vagrant_libvirt_release_sha256 is mapping
+      - vagrant_libvirt_gems is sequence and vagrant_libvirt_gems is not string and vagrant_libvirt_gems is not mapping
+      - tools_artifact_sha256 is mapping
+      - tools_cache_dir is match('^/var/cache/[a-zA-Z0-9_-]+$')
+      - runner_state_dir == '/var/lib/mare-runner'
+      - runner_home_root == '/home'
+      - not minikube_initialize or minikube_driver in ['docker', 'kvm2']
+      - not minikube_initialize or minikube_driver != 'docker' or docker_enabled
+      - not minikube_initialize or minikube_driver != 'kvm2' or virtualization_enabled
+      - minikube_cpus | int > 0
+      - minikube_memory_mb | int > 0
+      - minikube_host_reserve_memory_mb | int >= 0
+
+- name: Validate exact release versions
+  ansible.builtin.assert:
+    that:
+      - item is string and item is match('^[0-9]+[.][0-9]+[.][0-9]+$')
+    fail_msg: Tool versions must be explicit numeric major.minor.patch releases.
+  loop:
+    - "{{ docker_version }}"
+    - "{{ docker_compose_version }}"
+    - "{{ kubectl_version }}"
+    - "{{ minikube_version }}"
+    - "{{ kubernetes_version }}"
+    - "{{ helm_version }}"
+    - "{{ vagrant_version }}"
+    - "{{ vagrant_libvirt_version }}"
+    - "{{ wasmtime_version }}"
+
+- name: Validate configured artifact checksums
+  ansible.builtin.assert:
+    that:
+      - item.key in ['kubectl', 'minikube', 'helm', 'vagrant', 'wasmtime', 'docker-machine-driver-kvm2']
+      - item.value is string and item.value is match('^[a-fA-F0-9]{64}$')
+  loop: "{{ tools_artifact_sha256 | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Reject Wasmtime releases affected by known compiler security advisories
+  ansible.builtin.assert:
+    that:
+      - wasmtime_version is version('36.0.19', '>=')
+      - wasmtime_version is version('37.0.0', '<') or wasmtime_version is version('43.0.1', '>=')
+    fail_msg: >-
+      Wasmtime {{ wasmtime_version }} is blocked by known compiler security advisories
+      (Cranelift silent-overflow/miscompilation; Winch sandbox-escaping access).
+      No version is substituted automatically. Select and advisory-check an exact
+      patched release (36.0.19+ on the 36.x branch, or 43.0.1+) and configure its
+      verified tools_artifact_sha256.wasmtime, or disable wasmtime_enabled.
+  when: wasmtime_enabled
+
+- name: Require an explicitly pinned Wasmtime release checksum
+  ansible.builtin.assert:
+    that:
+      - >-
+        'wasmtime' in tools_artifact_sha256 or
+        wasmtime_release_sha256.get(wasmtime_version, '') is match('^[a-fA-F0-9]{64}$')
+    fail_msg: >-
+      Set tools_artifact_sha256.wasmtime to the verified SHA256 of
+      wasmtime-v{{ wasmtime_version }}-x86_64-linux.tar.xz from the official
+      bytecodealliance/wasmtime GitHub release. No digest is guessed.
+  when: wasmtime_enabled
+
+- name: Validate the offline libvirt plugin dependency lock
+  ansible.builtin.assert:
+    that:
+      - vagrant_libvirt_gems is sequence and vagrant_libvirt_gems is not string and vagrant_libvirt_gems is not mapping
+      - vagrant_libvirt_gems | length > 0
+      - vagrant_libvirt_gems | map(attribute='name') | unique | length == vagrant_libvirt_gems | length
+      - >-
+        vagrant_libvirt_gems | selectattr('name', 'equalto', 'vagrant-libvirt') |
+        selectattr('version', 'equalto', vagrant_libvirt_version) | list | length == 1
+    fail_msg: >-
+      Nonempty vagrant_libvirt_gems selects offline mode and requires the complete
+      reviewed dependency closure, each with exact name/version/sha256, including
+      vagrant-libvirt={{ vagrant_libvirt_version }}. Unpinned network gem resolution
+      is deliberately disabled.
+  when: vagrant_libvirt_enabled and vagrant_libvirt_gems | length > 0
+
+- name: Require an exact verified digest for the standalone libvirt plugin gem
+  ansible.builtin.assert:
+    that:
+      - vagrant_libvirt_gem_sha256 is match('^[a-fA-F0-9]{64}$')
+    fail_msg: >-
+      No verified vagrant-libvirt gem digest exists for {{ vagrant_libvirt_version }}.
+      Configure vagrant_libvirt_gem_sha256 for that exact release or supply a
+      complete optional vagrant_libvirt_gems lock; no older digest is reused.
+  when: vagrant_libvirt_enabled and vagrant_libvirt_gems | length == 0
+
+- name: Validate the exact Vagrant package revision
+  ansible.builtin.assert:
+    that:
+      - vagrant_package_revision is string and vagrant_package_revision is match('^[0-9]+$')
+  when: vagrant_enabled
+
+- name: Validate every pinned plugin gem
+  ansible.builtin.assert:
+    that:
+      - item.name is string and item.name is match('^[a-zA-Z0-9_-]+$')
+      - item.version is string and item.version is match('^[0-9]+[.][0-9]+[.][0-9]+([.][0-9]+)?$')
+      - item.sha256 is string and item.sha256 is match('^[a-fA-F0-9]{64}$')
+  loop: "{{ vagrant_libvirt_gems }}"
+  loop_control:
+    label: "{{ item.name | default('invalid gem') }}"
+  when: vagrant_libvirt_enabled
+
+- name: Validate existing runner home directories
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.ansible_facts.getent_passwd[item.item.user] is none or
+        item.ansible_facts.getent_passwd[item.item.user][4] == '/home/' + item.item.user
+    fail_msg: Existing runner accounts must use /home/USER; existing homes are never moved.
+  loop: "{{ preflight_accounts.results }}"
+  loop_control:
+    label: "{{ item.item.user }}"
+
+- name: Resolve managed cache and runner home paths without creating them
+  ansible.builtin.command:
+    argv: [readlink, -m, --, "{{ item }}"]
+  loop: >-
+    {{ [tools_cache_dir, '/usr/local/bin', runner_state_dir, runner_state_dir + '/accounts'] +
+    (runner_instances | map(attribute='user') | map('regex_replace', '^', '/home/') | list) +
+    ((runner_instances | map(attribute='user') | map('regex_replace', '^', '/home/') |
+    map('regex_replace', '$', '/.vagrant.d') | list) if vagrant_enabled else []) }}
+  register: tools_canonical_directories
+  changed_when: false
+  check_mode: false
+
+- name: Reject symlinked managed cache and home paths
+  ansible.builtin.assert:
+    that:
+      - item.stdout == item.item
+    fail_msg: "Managed tools path {{ item.item }} has a symlinked ancestor and is not modified."
+  loop: "{{ tools_canonical_directories.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Inspect existing root-controlled account state directories
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - "{{ runner_state_dir }}"
+    - "{{ runner_state_dir }}/accounts"
+  register: tools_account_state_directories
+
+- name: Refuse unsafe shared account state directories
+  ansible.builtin.assert:
+    that:
+      - >-
+        not item.stat.exists or
+        (item.stat.isdir | default(false) and item.stat.uid == 0 and
+        not (item.stat.islnk | default(false)) and item.stat.mode in ['0700', '0755'])
+    fail_msg: Shared account ownership state must be a root-owned directory, not writable by other users.
+  loop: "{{ tools_account_state_directories.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Inspect all dedicated accounts before package metadata or identity changes
+  ansible.builtin.include_tasks: account.yml
+  vars:
+    tools_account_reserve: false
+  loop: "{{ runner_instances }}"
+  loop_control:
+    loop_var: tools_runner
+    label: "{{ tools_runner.user }}"
+
+- name: Refresh Ubuntu package metadata without changing repository configuration
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Verify native Docker repositories and dependency availability before account creation
+  ansible.builtin.include_tasks: docker-native-preflight.yml
+  when: docker_enabled and docker_package_source == 'ubuntu'
+
+- name: Create root-controlled shared account ownership state
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ runner_state_dir }}"
+    - "{{ runner_state_dir }}/accounts"
+
+- name: Validate or reserve each dedicated account before creating any users
+  ansible.builtin.include_tasks: account.yml
+  vars:
+    tools_account_reserve: true
+  loop: "{{ runner_instances }}"
+  loop_control:
+    loop_var: tools_runner
+    label: "{{ tools_runner.user }}"
+
+- name: Create runner primary groups
+  ansible.builtin.group:
+    name: "{{ item.user }}"
+    state: present
+  loop: "{{ runner_instances }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Create runner users before installing per-user tools or permissions
+  ansible.builtin.user:
+    name: "{{ item.user }}"
+    group: "{{ item.user }}"
+    home: "/home/{{ item.user }}"
+    shell: /bin/bash
+    create_home: true
+    state: present
+  loop: "{{ runner_instances }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Install checked prerequisites from the selected Ubuntu release
+  ansible.builtin.include_tasks: packages.yml
+  vars:
+    tools_requested_packages: "{{ tools_ubuntu_packages[ansible_facts.distribution_release].common }}"
+
+- name: Create root-owned artifact cache
+  ansible.builtin.file:
+    path: "{{ tools_cache_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure Docker
+  ansible.builtin.include_tasks: docker.yml
+  when: docker_enabled
+
+- name: Install virtualization tools
+  ansible.builtin.include_tasks: virtualization.yml
+  when: virtualization_enabled
+
+- name: Install Kubernetes client tools
+  ansible.builtin.include_tasks: kubernetes.yml
+  when: kubectl_enabled or minikube_enabled or helm_enabled
+
+- name: Install Vagrant independently of the libvirt provider
+  ansible.builtin.include_tasks: vagrant.yml
+  when: vagrant_enabled
+
+- name: Install pinned Wasmtime
+  ansible.builtin.include_tasks: artifact.yml
+  vars:
+    tools_artifact:
+      name: wasmtime
+      version: "{{ wasmtime_version }}"
+      url: "https://github.com/bytecodealliance/wasmtime/releases/download/v{{ wasmtime_version }}/wasmtime-v{{ wasmtime_version }}-x86_64-linux.tar.xz"
+      filename: "wasmtime-v{{ wasmtime_version }}-x86_64-linux.tar.xz"
+      archive: true
+      binary: "wasmtime-v{{ wasmtime_version }}-x86_64-linux/wasmtime"
+      checksum_url: ""
+      sha256: "{{ wasmtime_release_sha256.get(wasmtime_version, '') }}"
+  when: wasmtime_enabled
+
+- name: Initialize isolated Minikube profiles only on request
+  ansible.builtin.include_tasks: minikube.yml
+  when: minikube_enabled and minikube_initialize
+
+- name: Check whether package installation requires reboot
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: tools_reboot_required
+
+- name: Report pending reboot
+  ansible.builtin.debug:
+    msg: >-
+      Reboot is required. Existing jobs are not interrupted unless
+      allow_reboot=true AND maintenance_confirmed=true.
+  when: tools_reboot_required.stat.exists
+
+- name: Reboot only during an explicitly confirmed maintenance window
+  ansible.builtin.reboot:
+    msg: Explicitly approved runner maintenance reboot
+    reboot_timeout: 900
+  when:
+    - tools_reboot_required.stat.exists
+    - allow_reboot
+    - maintenance_confirmed

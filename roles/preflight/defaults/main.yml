@@ -1,0 +1,8 @@
+---
+docker_enabled: true
+kubernetes_enabled: true
+virtualization_enabled: true
+wasmtime_enabled: true
+runner_instances: []
+allow_reboot: false
+maintenance_confirmed: false

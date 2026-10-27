@@ -1,0 +1,85 @@
+---
+- name: Validate runner platform and global settings
+  ansible.builtin.assert:
+    that:
+      - ansible_system == 'Linux'
+      - ansible_distribution == 'Ubuntu'
+      - ansible_distribution_release in ['noble', 'resolute']
+      - ansible_architecture == 'x86_64'
+      - runner_architecture == 'x64'
+      - runner_version is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+      - github_organization is match('^[A-Za-z0-9][A-Za-z0-9-]*$')
+      - github_runner_group | length > 0
+      - runner_instances is sequence
+      - runner_instances is not string
+      - runner_instances | length > 0
+      - runner_instances | map(attribute='name') | unique | length == runner_instances | length
+      - runner_instances | map(attribute='user') | unique | length == runner_instances | length
+      - runner_instances | map(attribute='install_dir') | unique | length == runner_instances | length
+      - runner_instances | map(attribute='work_dir') | unique | length == runner_instances | length
+      - (runner_instances | map(attribute='install_dir') | list) | intersect(runner_instances | map(attribute='work_dir') | list) | length == 0
+      - runner_api_url == 'https://api.github.com'
+      - runner_github_url == 'https://github.com'
+      - runner_service_path is match('^/[A-Za-z0-9_./:-]+$')
+      - runner_state_dir == '/var/lib/mare-runner'
+      - runner_home_root == '/home'
+      - runner_cache_dir == '/var/cache/mare-runner'
+      - minikube_profile | default('minikube') is match('^[a-z][a-z0-9-]{0,62}$')
+    fail_msg: Unsupported platform or unsafe runner settings.
+
+- name: Validate isolated instance settings
+  ansible.builtin.assert:
+    that:
+      - item.name is match('^[a-z][a-z0-9-]{0,40}$')
+      - item.user is match('^[a-z_][a-z0-9_-]{0,30}$')
+      - item.user not in ['root', 'ubuntu', 'runner', 'nobody']
+      - item.install_dir is match('^/(home|opt|srv|var/lib|mnt|data)/[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*$')
+      - item.work_dir is match('^/(home|opt|srv|var/lib|mnt|data)/[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*$')
+      - not item.install_dir.startswith(item.work_dir ~ '/')
+      - item.work_dir != runner_home_root ~ '/' ~ item.user
+      - item.labels is sequence
+      - item.labels is not string
+      - item.labels | length > 0
+      - item.labels | select('match', '^[A-Za-z0-9][A-Za-z0-9_.-]*$') | list | length == item.labels | length
+      - item.minikube_profile | default('minikube') is match('^[a-z][a-z0-9-]{0,62}$')
+    fail_msg: Each runner needs a unique dedicated account, safe absolute install/work directories under approved roots, and labels.
+  loop: "{{ runner_instances }}"
+  loop_control:
+    label: "{{ item.name | default('invalid') }}"
+
+- name: Reject nested installation directories
+  ansible.builtin.assert:
+    that:
+      - not item.0.install_dir.startswith(item.1.install_dir ~ '/')
+  loop: "{{ runner_instances | product(runner_instances) | list }}"
+  loop_control:
+    label: "{{ item.0.name }} / {{ item.1.name }}"
+
+- name: Resolve instance directory ancestors without creating anything
+  become: true
+  ansible.builtin.command:
+    argv: [readlink, -m, --, "{{ item }}"]
+  loop: "{{ (runner_instances | map(attribute='install_dir') | list) + (runner_instances | map(attribute='work_dir') | list) + (runner_instances | map(attribute='user') | map('regex_replace', '^', runner_home_root ~ '/') | list) }}"
+  register: runner_canonical_paths
+  changed_when: false
+  check_mode: false
+
+- name: Reject symlinked ancestors and noncanonical runner directories
+  ansible.builtin.assert:
+    that:
+      - item.stdout == item.item
+    fail_msg: Runner install, work and home directories must not traverse symlinked ancestors.
+  loop: "{{ runner_canonical_paths.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Reject directories overlapping another runner's work or installation
+  ansible.builtin.assert:
+    that:
+      - not item.0.work_dir.startswith(item.1.work_dir ~ '/')
+      - not item.0.work_dir.startswith(item.1.install_dir ~ '/')
+      - not item.0.install_dir.startswith(item.1.work_dir ~ '/')
+  when: item.0.name != item.1.name
+  loop: "{{ runner_instances | product(runner_instances) | list }}"
+  loop_control:
+    label: "{{ item.0.name }} / {{ item.1.name }}"

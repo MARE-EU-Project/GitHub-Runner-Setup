@@ -1,0 +1,12 @@
+---
+runner_instances:
+  - name: resolute-build-01
+    user: gha-build
+    install_dir: /opt/actions-runner/resolute-build-01
+    work_dir: /var/lib/actions-runner/resolute-build-01
+    labels: [ubuntu-26.04, docker, kvm, wasm, mare-smoke]
+  - name: resolute-build-02
+    user: gha-build-02
+    install_dir: /opt/actions-runner/resolute-build-02
+    work_dir: /var/lib/actions-runner/resolute-build-02
+    labels: [ubuntu-26.04, docker, kvm, wasm]

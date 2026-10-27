@@ -1,0 +1,87 @@
+---
+- name: Inspect managed runner before removal
+  ansible.builtin.include_tasks: inspect.yml
+
+- name: Guard removal of an existing runner
+  ansible.builtin.include_tasks: maintenance.yml
+  when: runner_marker.stat.exists
+
+- name: Remove managed runner
+  when:
+    - runner_marker.stat.exists
+    - not ansible_check_mode
+  block:
+    - name: Validate removal token availability before stopping
+      ansible.builtin.assert:
+        that:
+          - github_api_token | default('') | length > 0 or runner_removal_token | default('') | length > 0
+      no_log: true
+      when: runner_paths.results[1].stat.exists
+
+    - name: Stop and disable approved managed service
+      become: true
+      ansible.builtin.systemd_service:
+        name: "{{ runner_service_name }}"
+        state: stopped
+        enabled: false
+      when: runner_paths.results[2].stat.exists
+
+    - name: Remove organization registration
+      ansible.builtin.include_tasks: unregister.yml
+      when: runner_paths.results[1].stat.exists
+
+    - name: Remove only this managed service unit
+      become: true
+      ansible.builtin.file:
+        path: "/etc/systemd/system/{{ runner_service_name }}"
+        state: absent
+
+    - name: Preserve local state unless explicitly purging
+      ansible.builtin.debug:
+        msg: Registration and service removed; account, ownership records, install, HOME and work data retained. Explicit runner_purge_data is required for deletion.
+      when: not runner_purge_data | bool
+
+    - name: Purge only explicitly approved instance data
+      become: true
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      when: runner_purge_data | bool
+      loop:
+        - "{{ runner_instance.install_dir }}"
+        - "{{ runner_instance.work_dir }}"
+        - "{{ runner_home_root }}/{{ runner_instance.user }}"
+
+    - name: Remove dedicated account
+      become: true
+      when: runner_purge_data | bool
+      ansible.builtin.user:
+        name: "{{ runner_instance.user }}"
+        state: absent
+        remove: false
+
+    - name: Remove dedicated primary group
+      become: true
+      when: runner_purge_data | bool
+      ansible.builtin.group:
+        name: "{{ runner_instance.user }}"
+        state: absent
+
+    - name: Remove ownership manifest last
+      become: true
+      when: runner_purge_data | bool
+      ansible.builtin.file:
+        path: "{{ runner_state_dir }}/{{ runner_instance.name }}.json"
+        state: absent
+
+    - name: Remove shared dedicated-account ownership record
+      become: true
+      when: runner_purge_data | bool
+      ansible.builtin.file:
+        path: "{{ runner_state_dir }}/accounts/{{ runner_instance.user }}.json"
+        state: absent
+
+    - name: Reload systemd after removal
+      become: true
+      ansible.builtin.systemd_service:
+        daemon_reload: true

@@ -1,0 +1,67 @@
+---
+# Copy this inventory to inventory/production; never put credentials here.
+ansible_user: ubuntu
+github_organization: MARE-EU-Project
+github_runner_group: ENG
+runner_version: "2.338.0"
+runner_disable_update: true
+runner_archive_sha256: "{{ {'2.338.0': 'af4b794c1bc41d73d40535e3fe092a39f9679cd8d965954c2aca25a05ca41d32'}.get(runner_version, '') }}"
+runner_allow_reconfigure: false
+runner_allow_removal: false
+runner_purge_data: false
+runner_maintenance_confirmed: false
+runner_service_path: /usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+
+docker_enabled: true
+docker_compose_enabled: "{{ docker_enabled }}"
+kubernetes_enabled: true
+kubectl_enabled: "{{ kubernetes_enabled }}"
+minikube_enabled: "{{ kubernetes_enabled }}"
+helm_enabled: "{{ kubernetes_enabled }}"
+virtualization_enabled: true
+vagrant_enabled: "{{ virtualization_enabled }}"
+vagrant_libvirt_enabled: "{{ vagrant_enabled }}"
+wasmtime_enabled: true
+
+docker_version: "29.1.3"
+docker_compose_version: "2.40.3"
+kubectl_version: "1.37.1"
+minikube_version: "1.39.0"
+kubernetes_version: "1.37.0"
+helm_version: "4.3.0"
+vagrant_version: "2.4.9"
+vagrant_package_revision: "1"
+vagrant_libvirt_version: "0.12.2"
+wasmtime_version: "50.0.0"
+# Native Ubuntu security/backport packages meet the baseline on both releases.
+docker_package_source: ubuntu
+docker_apt_version_overrides:
+  noble:
+    docker.io: "29.1.3-0ubuntu3~24.04.2"
+    docker-compose-v2: "2.40.3+ds1-0ubuntu1~24.04.1"
+  resolute:
+    docker.io: "29.1.3-0ubuntu4.1"
+    docker-compose-v2: "2.40.3+ds1-0ubuntu1"
+tool_allow_upgrades: false
+# Add independently verified SHA256 values when a publisher endpoint is absent.
+tools_artifact_sha256: "{{ {'wasmtime': '77c19ee0437991f9ac7837b9c269d9c7076744f85dad263fea5214cc2723c7ff'} if wasmtime_version == '50.0.0' else {} }}"
+
+minikube_initialize: false
+minikube_driver: docker
+minikube_profile: minikube
+minikube_cpus: 2
+minikube_memory_mb: 16000
+minikube_host_reserve_memory_mb: 2048
+allow_reboot: false
+maintenance_confirmed: false
+
+functional_tests_enabled: false
+functional_tests_confirmed: false
+# Required only for opted-in tests; obtain from reviewed official publishers.
+# Use a long-running HTTP application image, not a mutable tag.
+functional_container_image: ""
+functional_vagrant_box_name: ""
+functional_vagrant_box_version: ""
+functional_vagrant_box_url: ""
+functional_vagrant_box_sha256: ""
+functional_vagrant_storage_pool: default

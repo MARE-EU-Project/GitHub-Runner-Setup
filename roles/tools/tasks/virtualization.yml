@@ -1,0 +1,51 @@
+---
+- name: Install checked Ubuntu QEMU and libvirt packages
+  ansible.builtin.include_tasks: packages.yml
+  vars:
+    tools_requested_packages: "{{ tools_ubuntu_packages[ansible_facts.distribution_release].virtualization }}"
+
+- name: Ensure libvirt and KVM access groups exist
+  ansible.builtin.group:
+    name: "{{ item }}"
+    state: present
+  loop: [libvirt, kvm]
+
+- name: Grant runner users access to system libvirt and KVM
+  ansible.builtin.user:
+    name: "{{ item.user }}"
+    groups: [libvirt, kvm]
+    append: true
+  loop: "{{ runner_instances }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Enable system libvirt without replacing daemon configuration
+  ansible.builtin.systemd_service:
+    name: libvirtd
+    enabled: true
+    state: started
+
+- name: Verify system libvirt connectivity as every runner
+  become: true
+  become_user: "{{ item.user }}"
+  ansible.builtin.command:
+    argv: [virsh, --connect, "qemu:///system", list, --all]
+  environment:
+    HOME: "/home/{{ item.user }}"
+    LIBVIRT_DEFAULT_URI: qemu:///system
+  changed_when: false
+  check_mode: false
+  loop: "{{ runner_instances }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Verify each runner can read and write the KVM device
+  become: true
+  become_user: "{{ item.user }}"
+  ansible.builtin.command:
+    argv: [test, -r, /dev/kvm, -a, -w, /dev/kvm]
+  changed_when: false
+  check_mode: false
+  loop: "{{ runner_instances }}"
+  loop_control:
+    label: "{{ item.user }}"
