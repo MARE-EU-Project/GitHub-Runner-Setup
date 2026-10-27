@@ -2,10 +2,20 @@
 - name: Validate requested runner configuration
   ansible.builtin.import_tasks: validate.yml
 
-- name: Install runner runtime dependencies
+- name: Refresh package metadata before guarded runner dependency installation
   become: true
   ansible.builtin.apt:
-    name:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install runner runtime dependencies through the guarded package flow
+  ansible.builtin.include_role:
+    name: tools
+    tasks_from: packages.yml
+    apply:
+      become: true
+  vars:
+    tools_requested_packages:
       - ca-certificates
       - curl
       - tar
@@ -15,9 +25,6 @@
       - libssl-dev
       - libkrb5-3
       - zlib1g
-    state: present
-    update_cache: true
-    cache_valid_time: 3600
 
 - name: Create root-controlled runner state directories
   become: true

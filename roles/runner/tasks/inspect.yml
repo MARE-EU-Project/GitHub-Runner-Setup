@@ -38,6 +38,29 @@
     - "{{ runner_home_root }}/{{ runner_instance.user }}"
   register: runner_paths
 
+- name: Resolve shared runner directory ancestors
+  ansible.builtin.set_fact:
+    runner_shared_directories: "{{ [runner_instance.install_dir | dirname, runner_instance.work_dir | dirname] | unique }}"
+
+- name: Inspect shared runner directory ancestors
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop: "{{ runner_shared_directories }}"
+  register: runner_shared_directory_stats
+
+- name: Validate existing shared runner directory ancestors
+  ansible.builtin.assert:
+    that:
+      - not item.stat.exists or (item.stat.isdir and not item.stat.islnk and item.stat.uid == 0)
+      - not item.stat.exists or item.stat.mode[2] in ['0', '1', '4', '5']
+      - not item.stat.exists or item.stat.mode[3] in ['1', '5']
+    fail_msg: Existing shared runner ancestors must be root-owned, non-writable by other users, and traversable by every runner.
+  loop: "{{ runner_shared_directory_stats.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
 - name: Check dedicated account
   ansible.builtin.getent:
     database: passwd
@@ -126,6 +149,7 @@
 
 - name: Calculate desired registration manifest
   ansible.builtin.set_fact:
+    runner_staging_dir: "{{ runner_instance.install_dir }}.staging"
     runner_desired:
       name: "{{ runner_instance.name }}"
       user: "{{ runner_instance.user }}"
@@ -136,6 +160,20 @@
       runner_group: "{{ github_runner_group }}"
       disable_update: "{{ runner_disable_update | bool }}"
     runner_upgrade: "{{ runner_installed is not skipped and (runner_installed.stdout | trim) is version(runner_version, '<') }}"
+
+- name: Inspect any interrupted private installation staging directory
+  become: true
+  ansible.builtin.stat:
+    path: "{{ runner_staging_dir }}"
+    follow: false
+  register: runner_staging
+
+- name: Refuse to replace an unowned installation staging directory
+  ansible.builtin.assert:
+    that:
+      - not runner_staging.stat.exists or runner_marker.stat.exists
+      - not runner_staging.stat.exists or (runner_staging.stat.isdir and not runner_staging.stat.islnk and runner_staging.stat.pw_name == runner_instance.user)
+    fail_msg: Refusing to remove an untrusted runner installation staging directory.
 
 - name: Calculate registration change
   ansible.builtin.set_fact:

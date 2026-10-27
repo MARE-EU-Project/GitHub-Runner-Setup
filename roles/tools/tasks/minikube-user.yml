@@ -1,21 +1,4 @@
 ---
-- name: Create private runner Kubernetes configuration directory
-  ansible.builtin.file:
-    path: "/home/{{ tools_runner.user }}/.config/runner-kubernetes"
-    state: directory
-    owner: "{{ tools_runner.user }}"
-    group: "{{ tools_runner.user }}"
-    mode: "0700"
-
-- name: Initialize only a new isolated kubeconfig
-  ansible.builtin.copy:
-    content: ""
-    dest: "{{ tools_minikube_kubeconfig }}"
-    force: false
-    owner: "{{ tools_runner.user }}"
-    group: "{{ tools_runner.user }}"
-    mode: "0600"
-
 - name: Create the root-owned profile ownership directory
   ansible.builtin.file:
     path: "/var/lib/runner-tools/minikube/{{ tools_runner.user }}"
@@ -31,6 +14,31 @@
     owner: root
     group: root
     mode: "0644"
+
+- name: Create private runner Kubernetes configuration root
+  ansible.builtin.file:
+    path: "/home/{{ tools_runner.user }}/.config/runner-kubernetes"
+    state: directory
+    owner: "{{ tools_runner.user }}"
+    group: "{{ tools_runner.user }}"
+    mode: "0700"
+
+- name: Create private profile-specific kubeconfig directory
+  ansible.builtin.file:
+    path: "{{ tools_minikube_kubeconfig | dirname }}"
+    state: directory
+    owner: "{{ tools_runner.user }}"
+    group: "{{ tools_runner.user }}"
+    mode: "0700"
+
+- name: Initialize only a new isolated kubeconfig
+  ansible.builtin.copy:
+    content: ""
+    dest: "{{ tools_minikube_kubeconfig }}"
+    force: false
+    owner: "{{ tools_runner.user }}"
+    group: "{{ tools_runner.user }}"
+    mode: "0600"
 
 - name: Start or recover only profiles identified by the read-only inspection
   become: true

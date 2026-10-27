@@ -9,21 +9,21 @@
   ansible.builtin.set_fact:
     functional_home: "{{ ansible_facts.getent_passwd[functional_instance.user][4] }}"
     functional_uid: "{{ ansible_facts.getent_passwd[functional_instance.user][1] }}"
-    functional_kubeconfig: >-
-      {{ functional_instance.kubeconfig | default(
-         ansible_facts.getent_passwd[functional_instance.user][4] ~ '/.config/runner-kubernetes/config') }}
     functional_minikube_profile: >-
       {{ functional_instance.minikube_profile | default(
          (minikube_profile | default('minikube')) ~
          ('-' ~ functional_instance.name if runner_instances | length > 1 else '')) }}
     functional_namespace_created: false
-    functional_active_kubeconfig: >-
-      {{ functional_instance.kubeconfig | default(
-         ansible_facts.getent_passwd[functional_instance.user][4] ~ '/.config/runner-kubernetes/config') }}
     functional_helm_attempted: false
     functional_compose_attempted: false
     functional_docker_created: false
     functional_vagrant_attempted: false
+  no_log: true
+
+- name: Resolve this profile's dedicated kubeconfig
+  ansible.builtin.set_fact:
+    functional_kubeconfig: "{{ functional_instance.kubeconfig | default(functional_home ~ '/.config/runner-kubernetes/' ~ functional_minikube_profile ~ '/config') }}"
+    functional_active_kubeconfig: "{{ functional_instance.kubeconfig | default(functional_home ~ '/.config/runner-kubernetes/' ~ functional_minikube_profile ~ '/config') }}"
   no_log: true
 
 - name: Validate explicit Kubernetes test scope

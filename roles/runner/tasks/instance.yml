@@ -71,7 +71,7 @@
 
     - name: Verify and stage pinned archive before any service interruption
       ansible.builtin.include_tasks: archive.yml
-      when: not runner_marker.stat.exists or runner_upgrade | bool
+      when: not runner_paths.results[0].stat.exists or runner_upgrade | bool
 
     - name: Confirm maintenance and check busy state immediately before stopping
       ansible.builtin.include_tasks: maintenance.yml
@@ -123,24 +123,7 @@
       changed_when: false
       failed_when: runner_account_uid.stdout | int == 0
 
-    - name: Inspect shared installation and work directory ancestors
-      become: true
-      ansible.builtin.stat:
-        path: "{{ item }}"
-        follow: false
-      loop:
-        - "{{ runner_instance.install_dir | dirname }}"
-        - "{{ runner_instance.work_dir | dirname }}"
-      register: runner_shared_ancestors
-
-    - name: Validate existing shared directory ancestors
-      ansible.builtin.assert:
-        that:
-          - not item.stat.exists or (item.stat.isdir and not item.stat.islnk)
-        fail_msg: Shared runner directory ancestors must be real directories.
-      loop: "{{ runner_shared_ancestors.results }}"
-
-    - name: Create missing root-controlled shared directory ancestors
+    - name: Create only missing root-owned shared runner ancestors
       become: true
       ansible.builtin.file:
         path: "{{ item.item }}"
@@ -148,7 +131,7 @@
         owner: root
         group: root
         mode: '0755'
-      loop: "{{ runner_shared_ancestors.results }}"
+      loop: "{{ runner_shared_directory_stats.results }}"
       when: not item.stat.exists
 
     - name: Verify the service account can traverse shared directory ancestors
@@ -157,23 +140,74 @@
       ansible.builtin.command:
         argv: [test, -x, "{{ item }}"]
       changed_when: false
-      loop:
-        - "{{ runner_instance.install_dir | dirname }}"
-        - "{{ runner_instance.work_dir | dirname }}"
+      loop: "{{ runner_shared_directories }}"
 
-    - name: Create private installation and home directories
+    - name: Persist ownership before creating a fresh installation
+      become: true
+      ansible.builtin.copy:
+        content: "{{ runner_desired | to_nice_json }}\n"
+        dest: "{{ runner_state_dir }}/{{ runner_instance.name }}.json"
+        owner: root
+        group: root
+        mode: '0600'
+      when: not runner_marker.stat.exists
+
+    - name: Create private installation directory for an existing installation
       become: true
       ansible.builtin.file:
-        path: "{{ item }}"
+        path: "{{ runner_instance.install_dir }}"
         state: directory
         owner: "{{ runner_instance.user }}"
         group: "{{ runner_instance.user }}"
         mode: '0700'
-      loop:
-        - "{{ runner_instance.install_dir }}"
-        - "{{ runner_home_root }}/{{ runner_instance.user }}"
+      when: runner_paths.results[0].stat.exists
 
-    - name: Extract verified release without removing registration files
+    - name: Create private runner home directory
+      become: true
+      ansible.builtin.file:
+        path: "{{ runner_home_root }}/{{ runner_instance.user }}"
+        state: directory
+        owner: "{{ runner_instance.user }}"
+        group: "{{ runner_instance.user }}"
+        mode: '0700'
+
+    - name: Remove only an owned interrupted installation stage
+      become: true
+      ansible.builtin.file:
+        path: "{{ runner_staging_dir }}"
+        state: absent
+      when: runner_staging.stat.exists
+
+    - name: Create a private installation staging directory
+      become: true
+      ansible.builtin.file:
+        path: "{{ runner_staging_dir }}"
+        state: directory
+        owner: "{{ runner_instance.user }}"
+        group: "{{ runner_instance.user }}"
+        mode: '0700'
+      when: not runner_paths.results[0].stat.exists
+
+    - name: Extract a fresh release into a private staging directory
+      become: true
+      ansible.builtin.unarchive:
+        src: "{{ runner_cache_dir }}/{{ runner_archive_name }}"
+        dest: "{{ runner_staging_dir }}"
+        remote_src: true
+        owner: "{{ runner_instance.user }}"
+        group: "{{ runner_instance.user }}"
+        extra_opts:
+          - --no-same-owner
+      when: not runner_paths.results[0].stat.exists
+
+    - name: Publish the complete fresh installation atomically
+      become: true
+      ansible.builtin.command:
+        argv: [mv, -T, --, "{{ runner_staging_dir }}", "{{ runner_instance.install_dir }}"]
+      changed_when: true
+      when: not runner_paths.results[0].stat.exists
+
+    - name: Upgrade a managed installation without removing registration files
       become: true
       ansible.builtin.unarchive:
         src: "{{ runner_cache_dir }}/{{ runner_archive_name }}"
@@ -183,7 +217,7 @@
         group: "{{ runner_instance.user }}"
         extra_opts:
           - --no-same-owner
-      when: not runner_marker.stat.exists or runner_upgrade | bool
+      when: runner_upgrade | bool
 
     - name: Restore private install permissions after archive extraction
       become: true
@@ -207,7 +241,7 @@
       ansible.builtin.include_tasks: unregister.yml
       when: runner_reconfigure | bool
 
-    - name: Write root-controlled nonsecret ownership manifest
+    - name: Update root-controlled nonsecret ownership manifest
       become: true
       ansible.builtin.copy:
         content: "{{ runner_desired | to_nice_json }}\n"

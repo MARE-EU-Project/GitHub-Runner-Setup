@@ -292,7 +292,7 @@ ansible-playbook -i inventory/production/hosts.yml playbooks/minikube.yml \
   --limit noble_runner -e '{"minikube_initialize":true}'
 # Read-only status on the example single-instance target:
 sudo -u gha-build env HOME=/home/gha-build \
-  KUBECONFIG=/home/gha-build/.config/runner-kubernetes/config minikube --profile minikube status
+  KUBECONFIG=/home/gha-build/.config/runner-kubernetes/minikube/config minikube --profile minikube status
 ```
 
 Defaults: Docker driver, profile `minikube`, Kubernetes `1.37.0`, 2 CPUs,

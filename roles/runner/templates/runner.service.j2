@@ -12,7 +12,7 @@ WorkingDirectory={{ runner_instance.install_dir }}
 Environment="HOME={{ runner_home_root }}/{{ runner_instance.user }}"
 Environment="PATH={{ runner_service_path }}"
 {% if minikube_enabled | default(kubernetes_enabled | default(true)) | bool %}
-Environment="KUBECONFIG={{ runner_home_root }}/{{ runner_instance.user }}/.config/runner-kubernetes/config"
+Environment="KUBECONFIG={{ runner_home_root }}/{{ runner_instance.user }}/.config/runner-kubernetes/{{ runner_instance.minikube_profile | default((minikube_profile | default('minikube')) ~ ('-' ~ runner_instance.name if runner_instances | length > 1 else '')) }}/config"
 Environment="MINIKUBE_PROFILE={{ runner_instance.minikube_profile | default((minikube_profile | default('minikube')) ~ ('-' ~ runner_instance.name if runner_instances | length > 1 else '')) }}"
 {% endif %}
 {% if virtualization_enabled | bool %}

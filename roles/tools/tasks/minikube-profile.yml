@@ -4,7 +4,7 @@
     tools_minikube_profile: >-
       {{ tools_runner.minikube_profile |
       default(minikube_profile + ('-' + tools_runner.name if runner_instances | length > 1 else '')) }}
-    tools_minikube_kubeconfig: "/home/{{ tools_runner.user }}/.config/runner-kubernetes/config"
+    tools_minikube_kubeconfig: "/home/{{ tools_runner.user }}/.config/runner-kubernetes/{{ tools_minikube_profile }}/config"
     tools_minikube_marker: "/var/lib/runner-tools/minikube/{{ tools_runner.user }}/{{ tools_minikube_profile }}.json"
     tools_minikube_identity:
       schema: 1
