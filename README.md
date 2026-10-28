@@ -8,17 +8,21 @@ registered runner, its credentials, machine identity, caches, or kubeconfig.
 
 ## Safety and validation status
 
-**Full host provisioning and GitHub registration have not been accepted on a
-target host.** The example addresses are placeholders. On 2026-10-27, an existing
-Ubuntu 26.04.1 x86-64 runner host passed isolated directory-ownership regressions
-and fresh/repeat Minikube initialization with Kubernetes 1.37.0, 2 CPUs and
-16000 MB RAM. Docker, Compose, Kubernetes and Helm functional tests also passed
-with scoped cleanup. Temporary test accounts and profiles were removed. This does
-not prove first-time tool installation, runner registration or full provisioning
-idempotence. Ubuntu 24.04 still requires a separate target run.
+**Full runner provisioning and GitHub registration remain unaccepted.**
+On 2026-10-28, fresh disposable Ubuntu 24.04 and 26.04 KVM guests passed
+preflight and tool installation, repeat runs with `changed=0`, and functional
+Docker, Compose, Kubernetes, Helm, Vagrant/libvirt VM boot/guest-command and
+Wasmtime/WASI tests. Runs resumed after the acceptance fixes documented below;
+the runner role and registration were not invoked. Both disposable guests and
+their test resources were removed after collecting evidence.
+
+The 2026-10-27 tests on an existing Ubuntu 26.04.1 runner host separately covered
+private directory ownership, nested work paths, Docker resource ownership and
+fresh/repeat isolated Minikube initialization. The existing production runner,
+its Docker containers and Minikube cluster remained running and unchanged.
 KVM acceptance requires physical hosts or VMs exposing nested virtualization,
-not containers. Credentials and pinned VM test artifacts must be supplied by
-an operator; Wasmtime was not available on the inspected host.
+not containers. Organization-runner credentials remain an operator prerequisite;
+registration and workflow dispatch are deferred by the operator.
 
 Requested versions are requirements, **not evidence that a release exists**.
 Missing packages, upstream artifacts, checksums, or incompatible dependencies
@@ -154,13 +158,13 @@ Other requested releases have official publication evidence:
 [Helm](https://github.com/helm/helm/releases/tag/v4.3.0),
 [Vagrant](https://releases.hashicorp.com/vagrant/2.4.9/), and
 [vagrant-libvirt](https://rubygems.org/api/v2/rubygems/vagrant-libvirt/versions/0.12.2.json).
-Helm's artifact hostname failed DNS resolution in this environment, so direct
-delivery of its archive/checksum was not validated here.
+Helm archive/checksum delivery and execution passed on both fresh guests on
+2026-10-28, following an earlier controller DNS failure.
 The [Wasmtime 50.0.0 asset listing](https://github.com/bytecodealliance/wasmtime/releases/expanded_assets/v50.0.0)
 publishes SHA256
 `77c19ee0437991f9ac7837b9c269d9c7076744f85dad263fea5214cc2723c7ff`
 for `wasmtime-v50.0.0-x86_64-linux.tar.xz`. The GNU/Linux build is the intended
-x86-64 artifact; actual target execution remains an acceptance check.
+x86-64 artifact; installation and WASI execution passed on both fresh guests.
 
 `tools_artifact_sha256` can pin reviewed archive digests. A required missing
 digest must be populated from an official release/checksum publication, not
@@ -328,8 +332,14 @@ Separate profiles still contend for the same host's CPU, memory, disk, ports
 and Docker daemon.
 
 Libvirt uses `qemu:///system`; runner accounts receive only the required
-`libvirt` and `kvm` groups. Verification checks device read/write access and
-the connection. Existing domains, networks, pools and disks are untouched.
+`libvirt` and `kvm` groups. Verification opens `/dev/kvm` and queries the stable
+KVM API as the runner account, then checks the system connection. `libvirtd.socket`
+is enabled at boot; the daemon may exit when idle and start again on demand.
+Ubuntu 24.04 installs `qemu-kvm`; Ubuntu 26.04 selects the concrete
+`qemu-system-x86` provider because `qemu-kvm` is virtual there. Both explicitly
+install `qemu-utils` and `dnsmasq-base` for image and NAT support when apt
+recommendations are disabled. Existing domains, networks, pools and disks are
+untouched.
 Allocate VM CPU/memory/storage for aggregate concurrent jobs and avoid sharing
 domain names. The project does not create a default libvirt network or storage
 pool: provide an approved network/pool before running VM tests.
@@ -465,8 +475,9 @@ and credentials remain external acceptance prerequisites.
 Development validation:
 
 Run `python3 -m unittest discover -s tests -v` for the directory-layout and
-Docker ownership regressions. These tests use temporary local directories and
-fixture Docker responses; they do not initialize a cluster or register runners.
+Docker ownership and Vagrant cleanup regressions. These tests use temporary
+local directories and fixture Docker/virsh responses; they do not initialize a
+cluster, access libvirt or register runners.
 Run `ansible-playbook playbooks/<name>.yml --syntax-check` for each playbook.
 The regressions cover private home/install ancestors, nested work directories,
 foreign/stopped containers and replaced daemon resource identities.
@@ -484,8 +495,18 @@ foreign/stopped containers and replaced daemon resource identities.
 | Docker ownership guard against existing live Minikube resources | Five cases passed; existing Docker resources and runner unchanged |
 | Fresh/repeat Minikube initialization, Kubernetes 1.37.0, 2 CPUs / 16000 MB | Passed on Ubuntu 26.04.1; isolated profile/account removed |
 | Python pip/venv support | Installed on Ubuntu 26.04.1 through the guarded package role; no upgrades/removals, repeat changed=0, new venv pip works |
-| Ubuntu 24.04 installation / second-run idempotence | Not executed; target required |
-| Ubuntu 26.04 installation / second-run idempotence | Not executed; separate target required |
+| Fresh Ubuntu 24.04 preflight/tools and repeat | Passed after acceptance fixes; repeat changed=0; runner role/registration deferred |
+| Fresh Ubuntu 26.04 preflight/tools and repeat | Passed after acceptance fixes; repeat changed=0; runner role/registration deferred |
 | Docker, Compose, Kubernetes and Helm functional tests | Passed on Ubuntu 26.04.1 with a digest-pinned image and isolated profile; scoped cleanup passed |
-| KVM/Vagrant VM boot, WASI runtime acceptance | Not executed; KVM access/plugin version checked, Wasmtime unavailable |
-| GitHub registration, availability, dispatched smoke workflow | Not executed; credentials/authorization required |
+| KVM/Vagrant VM boot, WASI runtime acceptance | Passed on Ubuntu 26.04.1 with Vagrant 2.4.9, plugin 0.12.2, pinned Debian 12 fixture and Wasmtime 50.0.0; scoped cleanup passed |
+| GitHub registration, availability, dispatched smoke workflow | Deferred by the operator; current credential lacks organization-runner administration permission |
+| Follow-up regression suite (15 tests), four playbook syntax checks | Passed with ansible-core 2.21.5; cleanup tests preserve unrelated and ambiguous volumes |
+| All six runtime tests on both fresh Ubuntu guests | Passed, including nested KVM API 12, Vagrant guest command and WASI stdout; scoped cleanup passed |
+
+The [2026-10-28 sanitized acceptance report](tests/evidence/2026-10-28-remaining-acceptance.json)
+records immutable cloud-image pins, actual versions, final recaps, log hashes
+and cleanup checks. Fresh-guest runs resumed after correcting Resolute's concrete
+QEMU package, explicit `qemu-utils`/`dnsmasq-base` dependencies, libvirt socket
+activation and supported `virsh vol-list` parsing. Full runner provisioning,
+registration, availability and the dispatched smoke workflow remain separate
+acceptance gates requiring the deferred credential.

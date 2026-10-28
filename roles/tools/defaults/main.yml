@@ -54,7 +54,7 @@ docker_apt_version_overrides:
 tools_ubuntu_packages:
   noble:
     common: [ca-certificates, gnupg, tar, gzip, xz-utils, unzip, sudo, acl, python3-pip, python3-venv]
-    virtualization: [qemu-kvm, libvirt-daemon-system, libvirt-clients]
+    virtualization: [qemu-kvm, qemu-utils, dnsmasq-base, libvirt-daemon-system, libvirt-clients]
     vagrant_libvirt_build: [libvirt-dev, build-essential, pkg-config, ruby-dev, libxml2-dev, libxslt1-dev, zlib1g-dev]
     docker:
       ubuntu:
@@ -67,7 +67,7 @@ tools_ubuntu_packages:
         compose: docker-compose-plugin
   resolute:
     common: [ca-certificates, gnupg, tar, gzip, xz-utils, unzip, sudo, acl, python3-pip, python3-venv]
-    virtualization: [qemu-kvm, libvirt-daemon-system, libvirt-clients]
+    virtualization: [qemu-system-x86, qemu-utils, dnsmasq-base, libvirt-daemon-system, libvirt-clients]
     vagrant_libvirt_build: [libvirt-dev, build-essential, pkg-config, ruby-dev, libxml2-dev, libxslt1-dev, zlib1g-dev]
     docker:
       ubuntu:

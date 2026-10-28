@@ -19,9 +19,9 @@
   loop_control:
     label: "{{ item.user }}"
 
-- name: Enable system libvirt without replacing daemon configuration
+- name: Enable libvirt socket activation without replacing daemon configuration
   ansible.builtin.systemd_service:
-    name: libvirtd
+    name: libvirtd.socket
     enabled: true
     state: started
 
@@ -39,11 +39,20 @@
   loop_control:
     label: "{{ item.user }}"
 
-- name: Verify each runner can read and write the KVM device
+# KVM_GET_API_VERSION checks real device access and the stable Linux KVM ABI.
+- name: Verify each runner can open KVM and query its API
   become: true
   become_user: "{{ item.user }}"
   ansible.builtin.command:
-    argv: [test, -r, /dev/kvm, -a, -w, /dev/kvm]
+    argv:
+      - /usr/bin/python3
+      - -c
+      - >-
+        import fcntl, os;
+        device = os.open('/dev/kvm', os.O_RDWR | os.O_CLOEXEC);
+        version = fcntl.ioctl(device, 0xAE00, 0);
+        os.close(device);
+        raise SystemExit(0 if version == 12 else 1)
   changed_when: false
   check_mode: false
   loop: "{{ runner_instances }}"

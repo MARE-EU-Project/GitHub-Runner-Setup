@@ -554,7 +554,7 @@
 
     - name: Inspect volumes only in the approved storage pool
       ansible.builtin.command:
-        argv: [virsh, --connect, qemu:///system, vol-list, --pool, "{{ functional_vagrant_storage_pool | default('default') }}", --name]
+        argv: [virsh, --connect, qemu:///system, vol-list, --pool, "{{ functional_vagrant_storage_pool | default('default') }}"]
       register: functional_vagrant_volumes
       changed_when: false
       failed_when: false
@@ -564,8 +564,9 @@
       ansible.builtin.command:
         argv: [virsh, --connect, qemu:///system, vol-delete, --pool, "{{ functional_vagrant_storage_pool | default('default') }}", --vol, "{{ item }}"]
       loop: >-
-        {{ functional_vagrant_volumes.stdout_lines | default([]) |
-           select('match', '^' ~ (functional_vagrant_box_alias | default('') | regex_escape) ~ '_vagrant_box_image_') | list }}
+        {{ functional_vagrant_volumes.stdout | default('') |
+           regex_findall('(?m)^\s*(' ~ (functional_vagrant_box_alias | default('') | regex_escape) ~
+                         '_vagrant_box_image_[A-Za-z0-9_.-]+)\s+/[^\r\n]*$') }}
       register: functional_vagrant_base_cleanup
       failed_when: false
       when:
@@ -578,7 +579,7 @@
 
     - name: Verify the approved pool contains no remaining test volumes
       ansible.builtin.command:
-        argv: [virsh, --connect, qemu:///system, vol-list, --pool, "{{ functional_vagrant_storage_pool | default('default') }}", --name]
+        argv: [virsh, --connect, qemu:///system, vol-list, --pool, "{{ functional_vagrant_storage_pool | default('default') }}"]
       register: functional_vagrant_final_volumes
       changed_when: false
       failed_when: false
@@ -604,9 +605,9 @@
             not (functional_vagrant_attempted | bool) or
             (functional_vagrant_final_volumes.rc | default(-1) == 0 and
              functional_vagrant_final_volumes.stdout_lines |
-               select('match', '^' ~ (functional_resource_name | regex_escape) ~ '_default') | list | length == 0 and
+               select('match', '^\s*' ~ (functional_resource_name | regex_escape) ~ '_default') | list | length == 0 and
              functional_vagrant_final_volumes.stdout_lines |
-               select('match', '^' ~ (functional_vagrant_box_alias | regex_escape) ~ '_vagrant_box_image_') | list | length == 0)
+               select('match', '^\s*' ~ (functional_vagrant_box_alias | regex_escape) ~ '_vagrant_box_image_') | list | length == 0)
         fail_msg: Functional cleanup failed; private workspace retained for targeted administrator recovery.
       no_log: false
 

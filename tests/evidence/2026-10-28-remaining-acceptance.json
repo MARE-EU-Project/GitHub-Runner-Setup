@@ -1,0 +1,247 @@
+{
+  "validation_date": "2026-10-28",
+  "base_commit": "173e5319ed1ed676d5d8f4cc7462cafd74cb7879",
+  "status": "partial_acceptance",
+  "registration": "deferred by operator; existing CLI credential returned HTTP 403 for organization-runner administration",
+  "scope": "Fresh-guest preflight/tool roles and runtime verification; runner role and registration were not invoked.",
+  "fresh_guest_runs_resumed_after_acceptance_fixes": true,
+  "controller": "ansible-core 2.21.5",
+  "regression_tests": 15,
+  "platforms": [
+    {
+      "ubuntu_version": "24.04",
+      "codename": "noble",
+      "kvm_api_version": 12,
+      "apt_packages": [
+        {
+          "name": "dnsmasq-base",
+          "version": "2.91-0ubuntu0.24.04.2",
+          "source_package": "dnsmasq",
+          "source_version": "2.91-0ubuntu0.24.04.2"
+        },
+        {
+          "name": "libvirt-clients",
+          "version": "10.0.0-2ubuntu8.19",
+          "source_package": "libvirt",
+          "source_version": "10.0.0-2ubuntu8.19"
+        },
+        {
+          "name": "libvirt-daemon-system",
+          "version": "10.0.0-2ubuntu8.19",
+          "source_package": "libvirt",
+          "source_version": "10.0.0-2ubuntu8.19"
+        },
+        {
+          "name": "qemu-system-x86",
+          "version": "1:8.2.2+ds-0ubuntu1.18",
+          "source_package": "qemu",
+          "source_version": "1:8.2.2+ds-0ubuntu1.18"
+        },
+        {
+          "name": "qemu-utils",
+          "version": "1:8.2.2+ds-0ubuntu1.18",
+          "source_package": "qemu",
+          "source_version": "1:8.2.2+ds-0ubuntu1.18"
+        },
+        {
+          "name": "vagrant",
+          "version": "2.4.9-1",
+          "source_package": "vagrant",
+          "source_version": "2.4.9-1"
+        }
+      ],
+      "cloud_image": {
+        "suite": "noble",
+        "image_url": "https://cloud-images.ubuntu.com/noble/20261017/noble-server-cloudimg-amd64.img",
+        "sha256": "04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94",
+        "bytes": 621284352
+      },
+      "preflight_and_tools": "completed after fixes",
+      "repeat": {
+        "ok": 328,
+        "changed": 0,
+        "unreachable": 0,
+        "failed": 0
+      },
+      "runtime_recap": {
+        "ok": 90,
+        "changed": 35,
+        "unreachable": 0,
+        "failed": 0
+      },
+      "runtime_tests": [
+        "Docker",
+        "Compose",
+        "Kubernetes 1.37.0",
+        "Helm 4.3.0",
+        "Vagrant/libvirt VM boot and guest command",
+        "Wasmtime 50.0.0 WASI stdout"
+      ],
+      "runtime_cleanup": "passed; dedicated pool empty and removed",
+      "actual_tool_version_outputs": [
+        "Docker version 29.1.3, build 29.1.3-0ubuntu3~24.04.2",
+        "2.40.3+ds1-0ubuntu1~24.04.1",
+        "{\n  \"clientVersion\": {\n    \"major\": \"1\",\n    \"minor\": \"37\",\n    \"gitVersion\": \"v1.37.1\",\n    \"gitCommit\": \"f78e722310e50bcaca9276be22276d9e91d91308\",\n    \"gitTreeState\": \"clean\",\n    \"buildDate\": \"2026-09-23T17:10:04Z\",\n    \"goVersion\": \"go1.26.8\",\n    \"compiler\": \"gc\",\n    \"platform\": \"linux/amd64\"\n  },\n  \"kustomizeVersion\": \"v5.8.1\"\n}",
+        "v1.39.0",
+        "v4.3.0+gbec5b06",
+        "Vagrant 2.4.9",
+        "vagrant-libvirt (0.12.2, global)\n  - Version Constraint: 0.12.2",
+        "wasmtime 50.0.0 (ebe5e8df1 2026-10-20)"
+      ],
+      "resumed_install_recap": {
+        "ok": 328,
+        "changed": 1,
+        "unreachable": 0,
+        "failed": 0
+      }
+    },
+    {
+      "ubuntu_version": "26.04",
+      "codename": "resolute",
+      "kvm_api_version": 12,
+      "apt_packages": [
+        {
+          "name": "dnsmasq-base",
+          "version": "2.92-1ubuntu0.5",
+          "source_package": "dnsmasq",
+          "source_version": "2.92-1ubuntu0.5"
+        },
+        {
+          "name": "libvirt-clients",
+          "version": "12.0.0-1ubuntu5.6",
+          "source_package": "libvirt",
+          "source_version": "12.0.0-1ubuntu5.6"
+        },
+        {
+          "name": "libvirt-daemon-system",
+          "version": "12.0.0-1ubuntu5.6",
+          "source_package": "libvirt",
+          "source_version": "12.0.0-1ubuntu5.6"
+        },
+        {
+          "name": "qemu-system-x86",
+          "version": "1:10.2.1+ds-1ubuntu3.3",
+          "source_package": "qemu",
+          "source_version": "1:10.2.1+ds-1ubuntu3.3"
+        },
+        {
+          "name": "qemu-utils",
+          "version": "1:10.2.1+ds-1ubuntu3.3",
+          "source_package": "qemu",
+          "source_version": "1:10.2.1+ds-1ubuntu3.3"
+        },
+        {
+          "name": "vagrant",
+          "version": "2.4.9-1",
+          "source_package": "vagrant",
+          "source_version": "2.4.9-1"
+        }
+      ],
+      "cloud_image": {
+        "suite": "resolute",
+        "image_url": "https://cloud-images.ubuntu.com/resolute/20261016/resolute-server-cloudimg-amd64.img",
+        "sha256": "5645d0318ad21f643ebb1ac4567514620e9893380b07b0201fda163baa5b7eb5",
+        "bytes": 859090944
+      },
+      "preflight_and_tools": "completed after fixes",
+      "repeat": {
+        "ok": 325,
+        "changed": 0,
+        "unreachable": 0,
+        "failed": 0
+      },
+      "runtime_recap": {
+        "ok": 90,
+        "changed": 35,
+        "unreachable": 0,
+        "failed": 0
+      },
+      "runtime_tests": [
+        "Docker",
+        "Compose",
+        "Kubernetes 1.37.0",
+        "Helm 4.3.0",
+        "Vagrant/libvirt VM boot and guest command",
+        "Wasmtime 50.0.0 WASI stdout"
+      ],
+      "runtime_cleanup": "passed; dedicated pool empty and removed",
+      "actual_tool_version_outputs": [
+        "Docker version 29.1.3, build 29.1.3-0ubuntu4.1",
+        "2.40.3+ds1-0ubuntu1",
+        "{\n  \"clientVersion\": {\n    \"major\": \"1\",\n    \"minor\": \"37\",\n    \"gitVersion\": \"v1.37.1\",\n    \"gitCommit\": \"f78e722310e50bcaca9276be22276d9e91d91308\",\n    \"gitTreeState\": \"clean\",\n    \"buildDate\": \"2026-09-23T17:10:04Z\",\n    \"goVersion\": \"go1.26.8\",\n    \"compiler\": \"gc\",\n    \"platform\": \"linux/amd64\"\n  },\n  \"kustomizeVersion\": \"v5.8.1\"\n}",
+        "v1.39.0",
+        "v4.3.0+gbec5b06",
+        "Vagrant 2.4.9",
+        "vagrant-libvirt (0.12.2, global)\n  - Version Constraint: 0.12.2",
+        "wasmtime 50.0.0 (ebe5e8df1 2026-10-20)"
+      ],
+      "resumed_install_recap": {
+        "ok": 328,
+        "changed": 1,
+        "unreachable": 0,
+        "failed": 0
+      }
+    }
+  ],
+  "syntax_checked_playbooks": 4,
+  "host_wasmtime_install_and_wasi": "passed",
+  "host_vagrant_boot_guest_command_and_cleanup": "passed",
+  "vagrant_guest_fixture": {
+    "name": "generic/debian12",
+    "version": "4.3.12",
+    "sha256": "923e4d14bbf207fbb40e97b27349030f9f54b2c3fb82edd8ae5d4ac900d3705c",
+    "url": "https://vagrantcloud.com/generic/boxes/debian12/versions/4.3.12/providers/libvirt/amd64/vagrant.box",
+    "purpose": "Pinned test guest only; supported provisioning targets remain Ubuntu 24.04 and 26.04."
+  },
+  "log_sha256": {
+    "noble-tools-repeat-final.log": "b1a1ef5264f3c05902207f740fb9154543195677f80fb6e30cbaf4db1e5257d6",
+    "noble-runtime.log": "fec6aaa20191fdaa6f959fd8502b6ca623bf4998d70c06f7f6f677b642bbdb09",
+    "resolute-tools-repeat-final.log": "f64e6c8380644e595b7086e03920ebe56f5c3d93692db89499f954605f380f0e",
+    "resolute-runtime.log": "c2e2584c7750f08c11cc68f1b57d09959f2c971aa42fa36112ccd21e2d6ec79e",
+    "wasmtime-acceptance.log": "40f672936e8ed1b58fb9638fa1c7d8e15fad5f72eb226135b164b8f983d74059",
+    "vagrant-acceptance.log": "85e66801c3193541d94d6b2543320e978853c32746b373a79610ea64b7a299d5",
+    "followup-regression.log": "32e069128799616de1e70b408d183c72ee9184b6db4a6ae1d92a3d7c30f79602",
+    "syntax.log": "d2aaa017d6d82420c75fd68808ea92a20148196f667e07cfda8e7092664c45fe",
+    "noble-tools-dependencies-corrected.log": "643eda6969501b3a7e70b5531e6ba568f13ee7c6b76f5e78207a7fefadbcc5ee",
+    "resolute-tools-dependencies-corrected.log": "9390cc9c3ac9aa785b9f9062adbce295cf6230b4e638220cd4ef5e00417c59db"
+  },
+  "remaining": [
+    "Full runner provisioning and registration/idempotence on both releases",
+    "Organization runner availability and dispatched smoke workflow"
+  ],
+  "acceptance_fixes": [
+    "Use concrete qemu-system-x86 on Ubuntu 26.04",
+    "Explicit qemu-utils and dnsmasq-base dependencies with apt recommendations disabled",
+    "Manage libvirt socket activation for idle-daemon idempotence",
+    "Verify real nonroot KVM API access",
+    "Use supported virsh volume listing and preserve unrelated/ambiguous volumes"
+  ],
+  "production_runner_unchanged_before_vm_cleanup": true,
+  "final_cleanup": {
+    "disposable_domains_removed": true,
+    "disposable_disks_and_cloudinit_seeds_removed": true,
+    "ephemeral_ssh_keys_removed": true,
+    "host_test_account_removed": true,
+    "unrelated_alpine_volume_preserved": true,
+    "production_runner_pid_and_start_time_unchanged": true,
+    "original_docker_containers_running": true,
+    "original_minikube_healthy": true
+  },
+  "tested_source_sha256": {
+    "roles/tools/defaults/main.yml": "9cbe24404ba9b514e8fe15c8cdbc9b914fe8d0fc2214a98e3b94ae082a5b30a7",
+    "roles/tools/tasks/virtualization.yml": "8b876a4893fd51fe5f278fa65aefe99fac84e875fefaea63b7cdf0dd8b83bfae",
+    "roles/verification/tasks/functional_account.yml": "719623de97815416f62c3db33067fcf8829bda14377d5c324922bff766884f4e",
+    "tests/test_vagrant_cleanup.py": "da842113567b36c0a28b15cc7763e1e6c7dd80e78cd08e456b1a28b3af4a6833"
+  },
+  "local_log_archives": [
+    {
+      "name": "runner-pr1-20261028-logs.tar.gz",
+      "sha256": "6aa67997112742baefa45e035cdf576e04cc5fc714808cddeac8b39c207cc54b"
+    },
+    {
+      "name": "runner-pr1-20261028-install-logs.tar.gz",
+      "sha256": "b228190c50fd78882a6206683babb2af7e6980f0ec4d7cd73a46fbaad303b07e"
+    }
+  ],
+  "targeted_host_test_volume_recovery": "A failed initial cleanup left one uniquely aliased test base image. Its exact identity and lack of domain references were verified before deletion; the pre-existing Alpine image was preserved."
+}
