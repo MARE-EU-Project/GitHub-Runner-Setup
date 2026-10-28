@@ -88,6 +88,18 @@
       - not tools_minikube_config_stat.stat.exists or tools_minikube_config_stat.stat.isreg
     fail_msg: The dedicated kubeconfig already exists without an ownership marker; it is not overwritten.
 
+- name: Verify daemon-wide Docker ownership before reserving this profile
+  ansible.builtin.script:
+    cmd: >-
+      minikube_docker_guard.py check {{ tools_minikube_profile | quote }}
+      {{ tools_runner.user | quote }} {{ tools_runner.name | quote }}
+      {{ (tools_minikube_marker + '.docker.json') | quote }}
+    executable: /usr/bin/python3
+  become: true
+  changed_when: false
+  check_mode: false
+  when: minikube_driver == 'docker'
+
 - name: Query only the managed profile status
   become: true
   become_user: "{{ tools_runner.user }}"
@@ -95,6 +107,8 @@
     argv: [/usr/local/bin/minikube, status, "--profile={{ tools_minikube_profile }}", --output=json]
   environment:
     HOME: "/home/{{ tools_runner.user }}"
+    DOCKER_HOST: unix:///var/run/docker.sock
+    DOCKER_CONTEXT: ""
     MINIKUBE_HOME: "/home/{{ tools_runner.user }}/.minikube"
     KUBECONFIG: "{{ tools_minikube_kubeconfig }}"
     LIBVIRT_DEFAULT_URI: qemu:///system

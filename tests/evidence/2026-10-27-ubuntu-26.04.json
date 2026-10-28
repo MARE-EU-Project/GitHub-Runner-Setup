@@ -1,0 +1,73 @@
+{
+  "status": "PASS",
+  "platform": "Ubuntu 26.04.1 x86-64",
+  "controller": "ansible-playbook [core 2.21.5]",
+  "regression_tests": 13,
+  "syntax_checked_playbooks": 4,
+  "live_directory_accounts": 2,
+  "live_directory_passes": 2,
+  "docker_ownership_checks": {
+    "cases": [
+      {
+        "case": "existing cluster without ownership record is rejected",
+        "passed": true
+      },
+      {
+        "case": "exact root-owned temporary resource record is accepted",
+        "passed": true
+      },
+      {
+        "case": "changed resource identity is rejected",
+        "passed": true
+      },
+      {
+        "case": "different account identity is rejected",
+        "passed": true
+      },
+      {
+        "case": "symlinked record is rejected",
+        "passed": true
+      }
+    ],
+    "existing_resources_and_runner_unchanged": true
+  },
+  "functional_acceptance": [
+    "Docker",
+    "Compose",
+    "Minikube fresh/repeat",
+    "Kubernetes 1.37.0",
+    "Helm"
+  ],
+  "minikube_resources": {
+    "cpus": 2,
+    "memory_mb": 16000
+  },
+  "pip_support": {
+    "system_and_new_virtualenv_pip": "verified",
+    "guarded_package_repeat_changed": 0
+  },
+  "existing_runner_service_unchanged": true,
+  "existing_containers_unchanged": true,
+  "test_resources_removed": true,
+  "not_accepted": [
+    "Ubuntu 24.04",
+    "full host provisioning",
+    "GitHub registration",
+    "Vagrant VM boot",
+    "WASI execution"
+  ],
+  "log_sha256": {
+    "standard-regression.log": "448e792e67aeebc6f470a48f368ee25eaf4fd1858b8bcc36828b59d109b207d9",
+    "standard-syntax.log": "164dd434f312c1a435186510115409a6fc07dfdcd038664836aafd2a2ac670b1",
+    "standard-live-directories.log": "b8f2c0e62decde10daf86d0ffe334b0b93015c0c71323c0472d6640ee0e5de32",
+    "standard-live-functional.log": "3a5cf2923fba6ea0055cf953d72bad1ec5a748722afa57f34266d07a762ef852",
+    "python-support.log": "029270fc9b2ebec5c965ee5d77314c595e8014ad23132b385c28a8803e1e057a",
+    "python-support-repeat.log": "621e1767949ca9f0ad8fed84395a43669f2d0a6b46d61bb2d88fccd072312a1e",
+    "pip-validation.log": "7f6c36ac923231d55e8b7e0b14a34e13636ce8750b2e38cccbdd69ae44242e8e",
+    "live-docker.json": "a2d1e150c90bf1af8043ff714bc18abf4f9f0f26828aade0d9ecf7fce564251d",
+    "standard-version.log": "d973f3a100dd9567fa35976c797c44a8c0ede5b6ed3df330b61e70aab25c0ab2"
+  },
+  "source_files_matched": 58,
+  "logs_archive_sha256": "4d30562a5c9c97e8638048230f0acb9611576b2bff112863455931203601f966",
+  "validation_date": "2026-10-27"
+}

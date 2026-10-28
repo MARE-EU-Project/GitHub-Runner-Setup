@@ -40,6 +40,17 @@
     group: "{{ tools_runner.user }}"
     mode: "0600"
 
+- name: Recheck daemon-wide ownership immediately before startup
+  ansible.builtin.script:
+    cmd: >-
+      minikube_docker_guard.py check {{ tools_minikube_profile | quote }}
+      {{ tools_runner.user | quote }} {{ tools_runner.name | quote }}
+      {{ (tools_minikube_marker + '.docker.json') | quote }}
+    executable: /usr/bin/python3
+  become: true
+  changed_when: false
+  when: minikube_driver == 'docker'
+
 - name: Start or recover only profiles identified by the read-only inspection
   become: true
   become_user: "{{ tools_runner.user }}"
@@ -55,6 +66,8 @@
       - --interactive=false
   environment:
     HOME: "/home/{{ tools_runner.user }}"
+    DOCKER_HOST: unix:///var/run/docker.sock
+    DOCKER_CONTEXT: ""
     MINIKUBE_HOME: "/home/{{ tools_runner.user }}/.minikube"
     KUBECONFIG: "{{ tools_minikube_kubeconfig }}"
     LIBVIRT_DEFAULT_URI: qemu:///system
@@ -68,6 +81,8 @@
     argv: [/usr/local/bin/minikube, status, "--profile={{ tools_minikube_profile }}", --output=json]
   environment:
     HOME: "/home/{{ tools_runner.user }}"
+    DOCKER_HOST: unix:///var/run/docker.sock
+    DOCKER_CONTEXT: ""
     MINIKUBE_HOME: "/home/{{ tools_runner.user }}/.minikube"
     KUBECONFIG: "{{ tools_minikube_kubeconfig }}"
     LIBVIRT_DEFAULT_URI: qemu:///system
@@ -110,3 +125,16 @@
   ansible.builtin.assert:
     that:
       - (tools_minikube_server_version.stdout | from_json).serverVersion.gitVersion == 'v' + kubernetes_version
+
+- name: Record exact Docker resources after verified startup
+  ansible.builtin.script:
+    cmd: >-
+      minikube_docker_guard.py record {{ tools_minikube_profile | quote }}
+      {{ tools_runner.user | quote }} {{ tools_runner.name | quote }}
+      {{ (tools_minikube_marker + '.docker.json') | quote }}
+    executable: /usr/bin/python3
+  become: true
+  changed_when: true
+  when:
+    - minikube_driver == 'docker'
+    - tools_runner.user in tools_minikube_start_profiles

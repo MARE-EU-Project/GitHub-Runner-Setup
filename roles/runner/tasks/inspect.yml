@@ -38,9 +38,13 @@
     - "{{ runner_home_root }}/{{ runner_instance.user }}"
   register: runner_paths
 
-- name: Resolve shared runner directory ancestors
+- name: Resolve shared and private runner directory ancestors
   ansible.builtin.set_fact:
-    runner_shared_directories: "{{ [runner_instance.install_dir | dirname, runner_instance.work_dir | dirname] | unique }}"
+    runner_directory_plan: "{{ runner_instance | runner_directory_plan(runner_home_root) }}"
+
+- name: Select shared runner directory ancestors
+  ansible.builtin.set_fact:
+    runner_shared_directories: "{{ runner_directory_plan.shared }}"
 
 - name: Inspect shared runner directory ancestors
   become: true

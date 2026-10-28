@@ -8,12 +8,17 @@ registered runner, its credentials, machine identity, caches, or kubeconfig.
 
 ## Safety and validation status
 
-**No target hosts have been provisioned or runtime-tested during development.**
-The example addresses are placeholders. Ubuntu 24.04 and Ubuntu 26.04 require
-separate acceptance runs; neither is claimed operationally verified.
+**Full host provisioning and GitHub registration have not been accepted on a
+target host.** The example addresses are placeholders. On 2026-10-27, an existing
+Ubuntu 26.04.1 x86-64 runner host passed isolated directory-ownership regressions
+and fresh/repeat Minikube initialization with Kubernetes 1.37.0, 2 CPUs and
+16000 MB RAM. Docker, Compose, Kubernetes and Helm functional tests also passed
+with scoped cleanup. Temporary test accounts and profiles were removed. This does
+not prove first-time tool installation, runner registration or full provisioning
+idempotence. Ubuntu 24.04 still requires a separate target run.
 KVM acceptance requires physical hosts or VMs exposing nested virtualization,
-not containers. Credentials, target hosts, and pinned VM/container test artifacts
-must be supplied by an operator.
+not containers. Credentials and pinned VM test artifacts must be supplied by
+an operator; Wasmtime was not available on the inspected host.
 
 Requested versions are requirements, **not evidence that a release exists**.
 Missing packages, upstream artifacts, checksums, or incompatible dependencies
@@ -35,7 +40,10 @@ Maintenance and reboot permissions are also off by default.
 * Targets: supported Ubuntu release, Python 3, SSH, systemd, a sudo-capable
   provisioning account, working DNS, correct time, CA trust and outbound HTTPS
   to GitHub and the documented software publishers. Host-key checking stays on.
-  Supply a sudo password through a prompt/Vault if required.
+  Supply a sudo password through a prompt/Vault if required. Provisioning installs
+  Ubuntu's `python3-pip` and `python3-venv` through the guarded package installer.
+  Keep project dependencies in virtual environments (`python3 -m venv .venv`);
+  do not install them into Ubuntu's externally managed system Python.
 * KVM: CPU `vmx` or `svm`, usable `/dev/kvm`, and firmware virtualization enabled.
   In a VM, the hypervisor must expose virtualization extensions and nested KVM.
   Enable nesting on the **outer host**, not by weakening target permissions.
@@ -302,6 +310,20 @@ configuration. Unowned profiles are rejected; existing contexts are not
 adopted. Provisioning never implicitly stops or deletes a profile.
 Stop/start/delete clusters only as the owning account with the explicit
 profile and managed kubeconfig, after draining every dependent runner.
+Effective profile names must be unique across runner instances on the host.
+Docker initialization checks the shared local daemon (including stopped
+containers, networks and volumes) before reserving a profile and again before
+startup. Exact resource identities are retained in a root-owned `0600`
+`<profile>.json.docker.json` record beside the profile marker. Same-name resources
+without that record, or replaced resources, are rejected even when Minikube
+labels match. Existing clusters created before this guard are not adopted.
+If startup is interrupted before the resource record is saved, preserve the
+resources and investigate privately or choose a fresh profile; rerunning does
+not authorize their adoption. Serialize initialization and other Docker changes
+on each host; these checks do not lock out external Docker administrators.
+Minikube uses the local `/var/run/docker.sock`, independent of user Docker
+contexts.
+
 Separate profiles still contend for the same host's CPU, memory, disk, ports
 and Docker daemon.
 
@@ -442,6 +464,13 @@ and credentials remain external acceptance prerequisites.
 
 Development validation:
 
+Run `python3 -m unittest discover -s tests -v` for the directory-layout and
+Docker ownership regressions. These tests use temporary local directories and
+fixture Docker responses; they do not initialize a cluster or register runners.
+Run `ansible-playbook playbooks/<name>.yml --syntax-check` for each playbook.
+The regressions cover private home/install ancestors, nested work directories,
+foreign/stopped containers and replaced daemon resource identities.
+
 | Check | Result |
 |---|---|
 | Example inventory and playbook YAML | Parsed locally |
@@ -450,7 +479,13 @@ Development validation:
 | Checksum/version binding | Passed; version overrides do not reuse baseline pins |
 | Collection declaration | `ansible-galaxy` succeeds with no external requirements |
 | Wasmtime 50.0.0 / vagrant-libvirt 0.12.2 advisory lookup | No known advisories returned |
+| Regression suite (13 tests), all four playbook syntax checks | Passed locally (Ansible 2.20.1) and on Ubuntu 26.04.1 (Ansible 2.20.1 and 2.21.5) |
+| Real directory tasks, two fresh accounts, home-based/nested layouts, repeat runs | Passed on Ubuntu 26.04.1; isolated accounts/paths removed |
+| Docker ownership guard against existing live Minikube resources | Five cases passed; existing Docker resources and runner unchanged |
+| Fresh/repeat Minikube initialization, Kubernetes 1.37.0, 2 CPUs / 16000 MB | Passed on Ubuntu 26.04.1; isolated profile/account removed |
+| Python pip/venv support | Installed on Ubuntu 26.04.1 through the guarded package role; no upgrades/removals, repeat changed=0, new venv pip works |
 | Ubuntu 24.04 installation / second-run idempotence | Not executed; target required |
 | Ubuntu 26.04 installation / second-run idempotence | Not executed; separate target required |
-| Docker, Compose, Kubernetes, Helm, KVM/Vagrant, WASI runtime acceptance | Not executed |
+| Docker, Compose, Kubernetes and Helm functional tests | Passed on Ubuntu 26.04.1 with a digest-pinned image and isolated profile; scoped cleanup passed |
+| KVM/Vagrant VM boot, WASI runtime acceptance | Not executed; KVM access/plugin version checked, Wasmtime unavailable |
 | GitHub registration, availability, dispatched smoke workflow | Not executed; credentials/authorization required |

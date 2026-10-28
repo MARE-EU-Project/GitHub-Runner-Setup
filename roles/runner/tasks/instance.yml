@@ -97,6 +97,17 @@
         group: root
         mode: '0600'
 
+    - name: Create only missing root-owned shared runner ancestors
+      become: true
+      ansible.builtin.file:
+        path: "{{ item.item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop: "{{ runner_shared_directory_stats.results }}"
+      when: not item.stat.exists
+
     - name: Create dedicated primary group
       become: true
       ansible.builtin.group:
@@ -122,17 +133,6 @@
       register: runner_account_uid
       changed_when: false
       failed_when: runner_account_uid.stdout | int == 0
-
-    - name: Create only missing root-owned shared runner ancestors
-      become: true
-      ansible.builtin.file:
-        path: "{{ item.item }}"
-        state: directory
-        owner: root
-        group: root
-        mode: '0755'
-      loop: "{{ runner_shared_directory_stats.results }}"
-      when: not item.stat.exists
 
     - name: Verify the service account can traverse shared directory ancestors
       become: true
@@ -227,6 +227,15 @@
         owner: "{{ runner_instance.user }}"
         group: "{{ runner_instance.user }}"
         mode: '0700'
+
+    - name: Create private nested parents only after publishing the installation
+      become: true
+      become_user: "{{ runner_instance.user }}"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0700'
+      loop: "{{ runner_directory_plan.private }}"
 
     - name: Create private work directory
       become: true

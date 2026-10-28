@@ -15,6 +15,23 @@
       - minikube_memory_mb | int > 0
       - minikube_host_reserve_memory_mb | int >= 0
 
+- name: Resolve effective profile names before inspecting or reserving resources
+  ansible.builtin.set_fact:
+    tools_minikube_profile_names: []
+
+- name: Collect effective profile names on this shared daemon
+  ansible.builtin.set_fact:
+    tools_minikube_profile_names: >-
+      {{ tools_minikube_profile_names + [item.minikube_profile |
+      default(minikube_profile + ('-' + item.name if runner_instances | length > 1 else ''))] }}
+  loop: "{{ runner_instances }}"
+
+- name: Reject duplicate effective Minikube profiles
+  ansible.builtin.assert:
+    that:
+      - tools_minikube_profile_names | unique | length == runner_instances | length
+    fail_msg: Runner instances sharing a Docker daemon must use distinct effective Minikube profile names.
+
 - name: Validate requested Minikube capacity against aggregate host capacity
   ansible.builtin.assert:
     that:
