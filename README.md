@@ -8,7 +8,7 @@ registered runner, its credentials, machine identity, caches, or kubeconfig.
 
 ## Safety and validation status
 
-**Full runner provisioning and GitHub registration remain unaccepted.**
+**Full runner provisioning and registration passed; dispatched workflow routing remains pending.**
 On 2026-10-28, fresh disposable Ubuntu 24.04 and 26.04 KVM guests passed
 preflight and tool installation, repeat runs with `changed=0`, and functional
 Docker, Compose, Kubernetes, Helm, Vagrant/libvirt VM boot/guest-command and
@@ -21,8 +21,14 @@ private directory ownership, nested work paths, Docker resource ownership and
 fresh/repeat isolated Minikube initialization. The existing production runner,
 its Docker containers and Minikube cluster remained running and unchanged.
 KVM acceptance requires physical hosts or VMs exposing nested virtualization,
-not containers. Organization-runner credentials remain an operator prerequisite;
-registration and workflow dispatch are deferred by the operator.
+not containers. A separate pair of fresh guests subsequently passed full
+`provision.yml`, registration with an operator-supplied short-lived token,
+repeat provisioning with `changed=0`, and corrected `verify.yml` checks.
+Both runners appeared Idle in ENG. The exact smoke script, including WASI,
+also passed locally as each runner account; this does not prove job routing.
+The test registrations and VMs were removed with operator approval.
+Dispatched acceptance remains blocked by the workflow bootstrap and existing
+runner-group repository policy described below.
 
 Requested versions are requirements, **not evidence that a release exists**.
 Missing packages, upstream artifacts, checksums, or incompatible dependencies
@@ -389,6 +395,13 @@ the newly provisioned runner, not an existing production runner. GitHub's
 default labels are retained. The workflow is supplied, **not dispatched** by
 provisioning or development.
 
+GitHub requires a `workflow_dispatch` workflow to exist on the default branch
+before its first manual dispatch; selecting the PR branch alone does not
+bootstrap it. See [GitHub's manual workflow requirements](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
+The selected runner group must also permit the repository and its visibility.
+Do not broaden an existing production group's public-repository access just to
+complete acceptance; use an explicitly approved group and bootstrap procedure.
+
 ## Safe maintenance, upgrades and removal
 
 1. Stop **new** jobs by removing repository access to the runner group or
@@ -495,11 +508,14 @@ foreign/stopped containers and replaced daemon resource identities.
 | Docker ownership guard against existing live Minikube resources | Five cases passed; existing Docker resources and runner unchanged |
 | Fresh/repeat Minikube initialization, Kubernetes 1.37.0, 2 CPUs / 16000 MB | Passed on Ubuntu 26.04.1; isolated profile/account removed |
 | Python pip/venv support | Installed on Ubuntu 26.04.1 through the guarded package role; no upgrades/removals, repeat changed=0, new venv pip works |
-| Fresh Ubuntu 24.04 preflight/tools and repeat | Passed after acceptance fixes; repeat changed=0; runner role/registration deferred |
-| Fresh Ubuntu 26.04 preflight/tools and repeat | Passed after acceptance fixes; repeat changed=0; runner role/registration deferred |
+| Fresh Ubuntu 24.04 preflight/tools and repeat | Passed after acceptance fixes; tool repeat changed=0; separate full runner run also passed |
+| Fresh Ubuntu 26.04 preflight/tools and repeat | Passed after acceptance fixes; tool repeat changed=0; separate full runner run also passed |
 | Docker, Compose, Kubernetes and Helm functional tests | Passed on Ubuntu 26.04.1 with a digest-pinned image and isolated profile; scoped cleanup passed |
 | KVM/Vagrant VM boot, WASI runtime acceptance | Passed on Ubuntu 26.04.1 with Vagrant 2.4.9, plugin 0.12.2, pinned Debian 12 fixture and Wasmtime 50.0.0; scoped cleanup passed |
-| GitHub registration, availability, dispatched smoke workflow | Deferred by the operator; current credential lacks organization-runner administration permission |
+| Full runner provisioning, registration and repeat on both fresh releases | Passed using the short-lived registration token; first ok=367/changed=47 each, repeats changed=0 |
+| Runner service/account verification and GitHub availability | Passed after fixing the remaining Resolute KVM probe; both runners observed Idle in ENG |
+| Exact smoke script with WASI under both runner accounts | Passed locally; no GitHub-dispatched job claimed |
+| Dispatched smoke workflow | HTTP 404: workflow absent from default branch; ENG also disallows public repositories while this repository is public; policies unchanged |
 | Follow-up regression suite (15 tests), four playbook syntax checks | Passed with ansible-core 2.21.5; cleanup tests preserve unrelated and ambiguous volumes |
 | All six runtime tests on both fresh Ubuntu guests | Passed, including nested KVM API 12, Vagrant guest command and WASI stdout; scoped cleanup passed |
 
@@ -507,6 +523,17 @@ The [2026-10-28 sanitized acceptance report](tests/evidence/2026-10-28-remaining
 records immutable cloud-image pins, actual versions, final recaps, log hashes
 and cleanup checks. Fresh-guest runs resumed after correcting Resolute's concrete
 QEMU package, explicit `qemu-utils`/`dnsmasq-base` dependencies, libvirt socket
-activation and supported `virsh vol-list` parsing. Full runner provisioning,
-registration, availability and the dispatched smoke workflow remain separate
-acceptance gates requiring the deferred credential.
+activation and supported `virsh vol-list` parsing.
+
+The subsequent [full registration acceptance report](tests/evidence/2026-10-28-registration.json)
+records fresh full provisioning, zero-change repeats, service/account checks,
+GitHub UI availability and local smoke results. Initial Resolute verification
+exposed a second external `test -r/-w` KVM check in the runner verification role;
+the actual open/ioctl probe now verifies access there too. Both final
+verification runs passed without relaxing permissions or restarting services.
+GitHub API online checks were skipped because only a registration token was
+supplied; the signed-in UI provided the independent Idle/group/label checks.
+Only actual dispatched workflow routing remains unaccepted. The workflow must
+first be bootstrapped on the default branch and the repository must be permitted
+by an explicitly approved runner-group policy. ENG's production access settings
+were preserved.

@@ -1,0 +1,563 @@
+{
+  "validation_date": "2026-10-28",
+  "base_commit": "a758274ddbe1b5fb5da4b279e1c071aba9704840",
+  "status": "registration_accepted_workflow_routing_pending",
+  "controller": "ansible-core 2.21.5",
+  "token_source": "Operator-supplied short-lived organization registration token, decrypted from Ansible Vault without a PAT; temporary password/token files removed.",
+  "minikube_initialize": false,
+  "scope": "Full production provision.yml and repeat on fresh disposable Ubuntu KVM guests; verify.yml after narrow KVM verification fix. Optional Minikube initialization/runtime gates are covered by the previous acceptance report.",
+  "platforms": [
+    {
+      "ubuntu_release": "24.04 noble",
+      "runner_name": "pr1-noble-reg-20261028",
+      "full_provision_first": {
+        "ok": 367,
+        "changed": 47,
+        "unreachable": 0,
+        "failed": 0
+      },
+      "full_provision_repeat": {
+        "ok": 348,
+        "changed": 0,
+        "unreachable": 0,
+        "failed": 0
+      },
+      "verification_after_fix": {
+        "ok": 66,
+        "changed": 0,
+        "unreachable": 0,
+        "failed": 0
+      },
+      "github_ui": "Observed Idle in ENG with expected self-hosted/Linux/X64/mare-smoke and unique instance label.",
+      "local_exact_smoke_script_with_wasi": "passed; executed as the runner account, not a GitHub-dispatched job",
+      "service_active_enabled_nonroot": true,
+      "listener_connected_and_listening": true,
+      "version_inventory": {
+        "apt_packages": [
+          {
+            "name": "libvirt-clients",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "10.0.0-2ubuntu8.19"
+            },
+            "version": "10.0.0-2ubuntu8.19"
+          },
+          {
+            "name": "libvirt-daemon",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "10.0.0-2ubuntu8.19"
+            },
+            "version": "10.0.0-2ubuntu8.19"
+          },
+          {
+            "name": "libvirt-daemon-config-network",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "10.0.0-2ubuntu8.19"
+            },
+            "version": "10.0.0-2ubuntu8.19"
+          },
+          {
+            "name": "libvirt-daemon-config-nwfilter",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "10.0.0-2ubuntu8.19"
+            },
+            "version": "10.0.0-2ubuntu8.19"
+          },
+          {
+            "name": "libvirt-daemon-driver-qemu",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "10.0.0-2ubuntu8.19"
+            },
+            "version": "10.0.0-2ubuntu8.19"
+          },
+          {
+            "name": "libvirt-daemon-system",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "10.0.0-2ubuntu8.19"
+            },
+            "version": "10.0.0-2ubuntu8.19"
+          },
+          {
+            "name": "libvirt-daemon-system-systemd",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "10.0.0-2ubuntu8.19"
+            },
+            "version": "10.0.0-2ubuntu8.19"
+          },
+          {
+            "name": "libvirt-dev:amd64",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "10.0.0-2ubuntu8.19"
+            },
+            "version": "10.0.0-2ubuntu8.19"
+          },
+          {
+            "name": "libvirt0:amd64",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "10.0.0-2ubuntu8.19"
+            },
+            "version": "10.0.0-2ubuntu8.19"
+          },
+          {
+            "name": "qemu-system-common",
+            "source": {
+              "manager": "apt",
+              "package": "qemu",
+              "version": "1:8.2.2+ds-0ubuntu1.18"
+            },
+            "version": "1:8.2.2+ds-0ubuntu1.18"
+          },
+          {
+            "name": "qemu-system-data",
+            "source": {
+              "manager": "apt",
+              "package": "qemu",
+              "version": "1:8.2.2+ds-0ubuntu1.18"
+            },
+            "version": "1:8.2.2+ds-0ubuntu1.18"
+          },
+          {
+            "name": "qemu-system-x86",
+            "source": {
+              "manager": "apt",
+              "package": "qemu",
+              "version": "1:8.2.2+ds-0ubuntu1.18"
+            },
+            "version": "1:8.2.2+ds-0ubuntu1.18"
+          },
+          {
+            "name": "qemu-utils",
+            "source": {
+              "manager": "apt",
+              "package": "qemu",
+              "version": "1:8.2.2+ds-0ubuntu1.18"
+            },
+            "version": "1:8.2.2+ds-0ubuntu1.18"
+          },
+          {
+            "name": "docker-compose-v2",
+            "source": {
+              "manager": "apt",
+              "package": "docker-compose-v2",
+              "version": "2.40.3+ds1-0ubuntu1~24.04.1"
+            },
+            "version": "2.40.3+ds1-0ubuntu1~24.04.1"
+          },
+          {
+            "name": "docker.io",
+            "source": {
+              "manager": "apt",
+              "package": "docker.io-app",
+              "version": "29.1.3-0ubuntu3~24.04.2"
+            },
+            "version": "29.1.3-0ubuntu3~24.04.2"
+          }
+        ],
+        "docker_installation_method": "apt",
+        "docker_package_source": "ubuntu",
+        "runners": [
+          {
+            "instance": "pr1-noble-reg-20261028",
+            "runner": {
+              "minimum_version": "2.338.0",
+              "source": "https://github.com/actions/runner/releases/tag/v2.338.0",
+              "version": "2.338.0"
+            },
+            "tools": [
+              {
+                "name": "docker",
+                "source": "https://archive.ubuntu.com/ubuntu/",
+                "version": "29.1.3"
+              },
+              {
+                "name": "docker_compose",
+                "source": "https://archive.ubuntu.com/ubuntu/",
+                "version": "2.40.3"
+              },
+              {
+                "name": "kubectl",
+                "source": "https://dl.k8s.io/",
+                "version": "1.37.1"
+              },
+              {
+                "name": "minikube",
+                "source": "https://storage.googleapis.com/minikube/releases/",
+                "version": "1.39.0"
+              },
+              {
+                "name": "helm",
+                "source": "https://get.helm.sh/",
+                "version": "4.3.0"
+              },
+              {
+                "name": "vagrant",
+                "source": "https://releases.hashicorp.com/vagrant/",
+                "version": "2.4.9"
+              },
+              {
+                "name": "vagrant_libvirt",
+                "source": "https://rubygems.org/gems/vagrant-libvirt",
+                "version": "0.12.2"
+              },
+              {
+                "name": "wasmtime",
+                "source": "https://github.com/bytecodealliance/wasmtime/releases",
+                "version": "50.0.0"
+              }
+            ]
+          }
+        ],
+        "schema_version": 1
+      }
+    },
+    {
+      "ubuntu_release": "26.04 resolute",
+      "runner_name": "pr1-resolute-reg-20261028",
+      "full_provision_first": {
+        "ok": 367,
+        "changed": 47,
+        "unreachable": 0,
+        "failed": 0
+      },
+      "full_provision_repeat": {
+        "ok": 345,
+        "changed": 0,
+        "unreachable": 0,
+        "failed": 0
+      },
+      "verification_after_fix": {
+        "ok": 66,
+        "changed": 1,
+        "unreachable": 0,
+        "failed": 0
+      },
+      "github_ui": "Observed Idle in ENG with expected self-hosted/Linux/X64/mare-smoke and unique instance label.",
+      "local_exact_smoke_script_with_wasi": "passed; executed as the runner account, not a GitHub-dispatched job",
+      "service_active_enabled_nonroot": true,
+      "listener_connected_and_listening": true,
+      "version_inventory": {
+        "apt_packages": [
+          {
+            "name": "libvirt-clients",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "12.0.0-1ubuntu5.6"
+            },
+            "version": "12.0.0-1ubuntu5.6"
+          },
+          {
+            "name": "libvirt-common",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "12.0.0-1ubuntu5.6"
+            },
+            "version": "12.0.0-1ubuntu5.6"
+          },
+          {
+            "name": "libvirt-daemon",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "12.0.0-1ubuntu5.6"
+            },
+            "version": "12.0.0-1ubuntu5.6"
+          },
+          {
+            "name": "libvirt-daemon-common",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "12.0.0-1ubuntu5.6"
+            },
+            "version": "12.0.0-1ubuntu5.6"
+          },
+          {
+            "name": "libvirt-daemon-config-network",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "12.0.0-1ubuntu5.6"
+            },
+            "version": "12.0.0-1ubuntu5.6"
+          },
+          {
+            "name": "libvirt-daemon-config-nwfilter",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "12.0.0-1ubuntu5.6"
+            },
+            "version": "12.0.0-1ubuntu5.6"
+          },
+          {
+            "name": "libvirt-daemon-driver-network",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "12.0.0-1ubuntu5.6"
+            },
+            "version": "12.0.0-1ubuntu5.6"
+          },
+          {
+            "name": "libvirt-daemon-driver-nodedev",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "12.0.0-1ubuntu5.6"
+            },
+            "version": "12.0.0-1ubuntu5.6"
+          },
+          {
+            "name": "libvirt-daemon-driver-nwfilter",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "12.0.0-1ubuntu5.6"
+            },
+            "version": "12.0.0-1ubuntu5.6"
+          },
+          {
+            "name": "libvirt-daemon-driver-qemu",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "12.0.0-1ubuntu5.6"
+            },
+            "version": "12.0.0-1ubuntu5.6"
+          },
+          {
+            "name": "libvirt-daemon-driver-secret",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "12.0.0-1ubuntu5.6"
+            },
+            "version": "12.0.0-1ubuntu5.6"
+          },
+          {
+            "name": "libvirt-daemon-driver-storage",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "12.0.0-1ubuntu5.6"
+            },
+            "version": "12.0.0-1ubuntu5.6"
+          },
+          {
+            "name": "libvirt-daemon-log",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "12.0.0-1ubuntu5.6"
+            },
+            "version": "12.0.0-1ubuntu5.6"
+          },
+          {
+            "name": "libvirt-daemon-system",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "12.0.0-1ubuntu5.6"
+            },
+            "version": "12.0.0-1ubuntu5.6"
+          },
+          {
+            "name": "libvirt-dev:amd64",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "12.0.0-1ubuntu5.6"
+            },
+            "version": "12.0.0-1ubuntu5.6"
+          },
+          {
+            "name": "libvirt0:amd64",
+            "source": {
+              "manager": "apt",
+              "package": "libvirt",
+              "version": "12.0.0-1ubuntu5.6"
+            },
+            "version": "12.0.0-1ubuntu5.6"
+          },
+          {
+            "name": "qemu-system-common",
+            "source": {
+              "manager": "apt",
+              "package": "qemu",
+              "version": "1:10.2.1+ds-1ubuntu3.3"
+            },
+            "version": "1:10.2.1+ds-1ubuntu3.3"
+          },
+          {
+            "name": "qemu-system-data",
+            "source": {
+              "manager": "apt",
+              "package": "qemu",
+              "version": "1:10.2.1+ds-1ubuntu3.3"
+            },
+            "version": "1:10.2.1+ds-1ubuntu3.3"
+          },
+          {
+            "name": "qemu-system-x86",
+            "source": {
+              "manager": "apt",
+              "package": "qemu",
+              "version": "1:10.2.1+ds-1ubuntu3.3"
+            },
+            "version": "1:10.2.1+ds-1ubuntu3.3"
+          },
+          {
+            "name": "qemu-utils",
+            "source": {
+              "manager": "apt",
+              "package": "qemu",
+              "version": "1:10.2.1+ds-1ubuntu3.3"
+            },
+            "version": "1:10.2.1+ds-1ubuntu3.3"
+          },
+          {
+            "name": "docker-compose-v2",
+            "source": {
+              "manager": "apt",
+              "package": "docker-compose-v2",
+              "version": "2.40.3+ds1-0ubuntu1"
+            },
+            "version": "2.40.3+ds1-0ubuntu1"
+          },
+          {
+            "name": "docker.io",
+            "source": {
+              "manager": "apt",
+              "package": "docker.io-app",
+              "version": "29.1.3-0ubuntu4.1"
+            },
+            "version": "29.1.3-0ubuntu4.1"
+          }
+        ],
+        "docker_installation_method": "apt",
+        "docker_package_source": "ubuntu",
+        "runners": [
+          {
+            "instance": "pr1-resolute-reg-20261028",
+            "runner": {
+              "minimum_version": "2.338.0",
+              "source": "https://github.com/actions/runner/releases/tag/v2.338.0",
+              "version": "2.338.0"
+            },
+            "tools": [
+              {
+                "name": "docker",
+                "source": "https://archive.ubuntu.com/ubuntu/",
+                "version": "29.1.3"
+              },
+              {
+                "name": "docker_compose",
+                "source": "https://archive.ubuntu.com/ubuntu/",
+                "version": "2.40.3"
+              },
+              {
+                "name": "kubectl",
+                "source": "https://dl.k8s.io/",
+                "version": "1.37.1"
+              },
+              {
+                "name": "minikube",
+                "source": "https://storage.googleapis.com/minikube/releases/",
+                "version": "1.39.0"
+              },
+              {
+                "name": "helm",
+                "source": "https://get.helm.sh/",
+                "version": "4.3.0"
+              },
+              {
+                "name": "vagrant",
+                "source": "https://releases.hashicorp.com/vagrant/",
+                "version": "2.4.9"
+              },
+              {
+                "name": "vagrant_libvirt",
+                "source": "https://rubygems.org/gems/vagrant-libvirt",
+                "version": "0.12.2"
+              },
+              {
+                "name": "wasmtime",
+                "source": "https://github.com/bytecodealliance/wasmtime/releases",
+                "version": "50.0.0"
+              }
+            ]
+          }
+        ],
+        "schema_version": 1
+      }
+    }
+  ],
+  "regression_tests": 15,
+  "syntax_checked_playbooks": 4,
+  "acceptance_fix": "Runner verify_instance.yml still used external test -r/-w for /dev/kvm, failing on Resolute despite valid access. Replaced with open(O_RDWR) and KVM_GET_API_VERSION == 12; both production verification playbooks passed after the fix, without changing device permissions or restarting services.",
+  "workflow_routing": {
+    "dispatch": "Attempted against PR branch; HTTP 404. Workflow absent from default branch and registered workflows list.",
+    "default_branch": "main",
+    "repository_visibility": "public",
+    "eng_group_policy": "Selected repositories; Allow public repositories unchecked; all workflows. Observed through signed-in organization settings.",
+    "policy_changed": false,
+    "remaining": [
+      "Approved workflow bootstrap on default branch",
+      "Approved runner-group policy permitting this public repository",
+      "Actual GitHub-dispatched smoke run on each supported release"
+    ],
+    "github_requirement": "https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow"
+  },
+  "tested_source_sha256": {
+    "roles/runner/tasks/verify_instance.yml": "1f1eb4176e0931bdd4a1bbe66710a250312ebb78866023dd4b799c1d5176cc53"
+  },
+  "log_sha256": {
+    "noble-provision-first.log": "cc32088529871fcde02e28f545521d8caa2825b2895431e7bfd1f155aa7cfe14",
+    "noble-provision-repeat.log": "bf03ee15b141a152c46aa710f2173bf109f1d79adcb6cdb23abbee52fe95f20f",
+    "noble-verify-corrected.log": "e3e0949e0a23778d41d0adbe7ae8513e04c5f1bd1ebc1a7443f672172149af5f",
+    "noble-local-smoke.log": "03b7860e44c68e859c8532949f7dc396ec9da8b056631dce5dd3e2846584c102",
+    "resolute-provision-first.log": "6681023e1e3c6e54baa6e7416bc7b64e60812e3cfa1315076e13e6a455c42d3f",
+    "resolute-provision-repeat.log": "43f9868c84917c7987fa3d96db06c84c284db7fa97ea22946e26283b39078eb3",
+    "resolute-verify-corrected.log": "a3770b661f00c604de722f2346370c737c2dcb7a182aa0b0916967b2cd72551a",
+    "resolute-local-smoke.log": "939a5f100e16c7cb4018620b89bf2483e3ac2f69d39682b16656cdf58163a726",
+    "regression.log": "f31f27f886c6a67f48cc5b1cfb074ee307f3a6a87426d3e806397b391e677a55",
+    "syntax.log": "322671d456e7cee73ae48d28b11c32c04f07077c372d1318171c8386b11738b5",
+    "resolute-verify.log": "9133408db44da79c735c8c026e6dee23241c704aef66aa5cdebab730738a9aa8"
+  },
+  "final_cleanup": {
+    "github_test_registrations_removed_via_approved_ui": true,
+    "eng_group_policy_unchanged": true,
+    "disposable_domains_removed": true,
+    "disposable_disks_and_cloudinit_seeds_removed": true,
+    "ephemeral_ssh_keys_removed": true,
+    "host_test_account_removed": true,
+    "unrelated_alpine_volume_preserved": true,
+    "production_runner_pid_and_start_time_unchanged": true,
+    "original_docker_containers_running": true,
+    "original_minikube_healthy": true
+  },
+  "local_log_archive": {
+    "name": "runner-pr1-registration-logs.tar.gz",
+    "sha256": "af69959eef1b4364232081ed02c259d45a6c0e4489f27c295d251c0f0efb577c"
+  },
+  "cloud_image_pins": "Same independently verified immutable images recorded in 2026-10-28-remaining-acceptance.json; new disposable overlays, cloud-init identities and SSH keys were created for the full runner run."
+}

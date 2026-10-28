@@ -80,10 +80,27 @@
   environment:
     HOME: "{{ runner_home_root }}/{{ runner_instance.user }}"
     PATH: "{{ runner_service_path }}"
-  loop: "{{ [['id', '-u'], [runner_instance.install_dir ~ '/bin/Runner.Listener', '--version']] + ([['docker', '--version'], ['docker', 'ps', '--quiet']] if docker_enabled | bool else []) + ([['virsh', '--connect', 'qemu:///system', 'list', '--all'], ['test', '-r', '/dev/kvm'], ['test', '-w', '/dev/kvm']] if virtualization_enabled | bool else []) }}"
+  loop: "{{ [['id', '-u'], [runner_instance.install_dir ~ '/bin/Runner.Listener', '--version']] + ([['docker', '--version'], ['docker', 'ps', '--quiet']] if docker_enabled | bool else []) + ([['virsh', '--connect', 'qemu:///system', 'list', '--all']] if virtualization_enabled | bool else []) }}"
   register: runner_tool_checks
   changed_when: false
   check_mode: false
+
+- name: Verify actual KVM API access as the service account
+  become: true
+  become_user: "{{ runner_instance.user }}"
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - >-
+        import fcntl, os;
+        device = os.open('/dev/kvm', os.O_RDWR | os.O_CLOEXEC);
+        version = fcntl.ioctl(device, 0xAE00, 0);
+        os.close(device);
+        raise SystemExit(0 if version == 12 else 1)
+  changed_when: false
+  check_mode: false
+  when: virtualization_enabled | bool
 
 - name: Assert service software does not run as root
   ansible.builtin.assert:
