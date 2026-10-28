@@ -1,0 +1,11 @@
+---
+- name: Explicitly deregister selected runners without deleting workloads
+  hosts: github_runners
+  gather_facts: true
+  serial: 1
+  tasks:
+    - name: Remove only explicitly selected runner registrations and services
+      ansible.builtin.import_role:
+        name: runner
+        tasks_from: remove
+      tags: [runner, removal]

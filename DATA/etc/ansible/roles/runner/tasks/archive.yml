@@ -1,0 +1,36 @@
+---
+- name: Inspect the pinned official runner release
+  ansible.builtin.uri:
+    url: "{{ runner_api_url }}/repos/actions/runner/releases/tags/v{{ runner_version }}"
+    method: GET
+    headers:
+      Accept: application/vnd.github+json
+      X-GitHub-Api-Version: '2022-11-28'
+    return_content: true
+    status_code: 200
+  register: runner_release
+  when: runner_archive_sha256 | length == 0
+
+- name: Select the exact architecture archive
+  ansible.builtin.set_fact:
+    runner_archive_name: "actions-runner-linux-{{ runner_architecture }}-{{ runner_version }}.tar.gz"
+
+- name: Select published SHA-256 digest
+  ansible.builtin.set_fact:
+    runner_checksum: "{{ runner_archive_sha256 if runner_archive_sha256 | length > 0 else ((runner_release.json.assets | selectattr('name', 'equalto', runner_archive_name) | map(attribute='digest', default='') | first | default('', true)) | default('', true) | regex_replace('^sha256:', '')) }}"
+
+- name: Require a cryptographically verified archive
+  ansible.builtin.assert:
+    that:
+      - runner_checksum is match('^[a-fA-F0-9]{64}$')
+    fail_msg: No published SHA-256 asset digest; provide independently verified runner_archive_sha256. Unverified archives are never installed.
+
+- name: Download exact verified official runner archive
+  become: true
+  ansible.builtin.get_url:
+    url: "https://github.com/actions/runner/releases/download/v{{ runner_version }}/{{ runner_archive_name }}"
+    dest: "{{ runner_cache_dir }}/{{ runner_archive_name }}"
+    checksum: "sha256:{{ runner_checksum | lower }}"
+    owner: root
+    group: root
+    mode: '0644'

@@ -1,0 +1,37 @@
+---
+- name: Inspect enabled native Ubuntu package origins
+  ansible.builtin.command:
+    argv: [apt-cache, policy]
+  environment:
+    LC_ALL: C
+  register: tools_native_apt_policy
+  changed_when: false
+  check_mode: false
+
+- name: Require this Ubuntu release's universe and security indexes
+  ansible.builtin.assert:
+    that:
+      - >-
+        tools_native_apt_policy.stdout_lines |
+        select('search', '(^|[, ])o=Ubuntu([, ]|$)') |
+        select('search', '(^|[, ])a=' + ansible_facts.distribution_release + '([, ]|$)') |
+        select('search', '(^|[, ])c=universe([, ]|$)') | list | length > 0
+      - >-
+        tools_native_apt_policy.stdout_lines |
+        select('search', '(^|[, ])o=Ubuntu([, ]|$)') |
+        select('search', '(^|[, ])a=' + ansible_facts.distribution_release + '-security([, ]|$)') |
+        select('search', '(^|[, ])c=universe([, ]|$)') | list | length > 0
+    fail_msg: >-
+      Native Docker requires the configured Ubuntu
+      {{ ansible_facts.distribution_release }} universe and
+      {{ ansible_facts.distribution_release }}-security universe indexes.
+      Configure these signed native sources explicitly. This role never enables
+      broad repositories or borrows packages from another Ubuntu suite.
+
+- name: Resolve native Docker versions before creating runner accounts
+  ansible.builtin.include_tasks: docker-resolve.yml
+
+- name: Validate native Docker dependencies and update safety before account changes
+  ansible.builtin.include_tasks: package-preflight.yml
+  vars:
+    tools_requested_packages: "{{ tools_docker_exact_packages }}"

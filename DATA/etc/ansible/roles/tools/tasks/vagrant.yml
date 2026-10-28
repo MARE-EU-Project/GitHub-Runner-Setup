@@ -1,0 +1,82 @@
+---
+- name: Download the official Vagrant Debian release with verified checksum
+  ansible.builtin.get_url:
+    url: "https://releases.hashicorp.com/vagrant/{{ vagrant_version }}/vagrant_{{ vagrant_version }}-{{ vagrant_package_revision }}_amd64.deb"
+    dest: "{{ tools_cache_dir }}/vagrant_{{ vagrant_version }}-{{ vagrant_package_revision }}_amd64.deb"
+    checksum: "sha256:{{ tools_artifact_sha256.vagrant | default('https://releases.hashicorp.com/vagrant/' + vagrant_version + '/vagrant_' + vagrant_version + '_SHA256SUMS') }}"
+    owner: root
+    group: root
+    mode: "0644"
+    timeout: 60
+
+- name: Inspect locally shadowing Vagrant executable
+  ansible.builtin.stat:
+    path: /usr/local/bin/vagrant
+    follow: false
+  register: tools_vagrant_shadow
+
+- name: Reject locally shadowing Vagrant installations
+  ansible.builtin.assert:
+    that:
+      - not tools_vagrant_shadow.stat.exists
+    fail_msg: >-
+      Vagrant is managed through its official Debian package at /usr/bin/vagrant.
+      An existing /usr/local/bin/vagrant is not removed or overwritten; review it
+      manually before continuing.
+
+- name: Inspect any installed Vagrant package
+  ansible.builtin.command:
+    argv: [dpkg-query, --show, "--showformat=${Status}|${Version}", vagrant]
+  register: tools_vagrant_installed_package
+  changed_when: false
+  failed_when: tools_vagrant_installed_package.rc not in [0, 1]
+  check_mode: false
+
+- name: Require opt-in before changing an installed Vagrant package
+  ansible.builtin.assert:
+    that:
+      - >-
+        not tools_vagrant_installed_package.stdout.startswith('install ok installed|') or
+        tools_vagrant_installed_package.stdout == 'install ok installed|' + vagrant_version + '-' + vagrant_package_revision or
+        (tool_allow_upgrades and maintenance_confirmed and tools_drain_confirmed)
+    fail_msg: >-
+      Existing Vagrant differs from the requested package. An approved update
+      requires tool_allow_upgrades, maintenance_confirmed, and tools_drain_confirmed.
+
+- name: Simulate the official Vagrant package installation and all dependencies
+  ansible.builtin.include_tasks: package-preflight.yml
+  vars:
+    tools_requested_packages:
+      - "{{ tools_cache_dir }}/vagrant_{{ vagrant_version }}-{{ vagrant_package_revision }}_amd64.deb"
+
+- name: Install the verified Vagrant package without replacing local configuration
+  ansible.builtin.apt:
+    deb: "{{ tools_cache_dir }}/vagrant_{{ vagrant_version }}-{{ vagrant_package_revision }}_amd64.deb"
+    install_recommends: false
+    dpkg_options: force-confdef,force-confold
+    allow_downgrade: false
+    fail_on_autoremove: true
+    policy_rc_d: 101
+
+- name: Verify installed Vagrant release
+  become: true
+  become_user: "{{ runner_instances[0].user }}"
+  ansible.builtin.command:
+    argv: [/usr/bin/vagrant, --version]
+    chdir: "/home/{{ runner_instances[0].user }}"
+  environment:
+    HOME: "/home/{{ runner_instances[0].user }}"
+    VAGRANT_HOME: "/home/{{ runner_instances[0].user }}/.vagrant.d"
+    VAGRANT_CHECKPOINT_DISABLE: "1"
+  register: tools_vagrant_version
+  changed_when: false
+  check_mode: false
+
+- name: Require exact Vagrant version
+  ansible.builtin.assert:
+    that:
+      - tools_vagrant_version.stdout | trim == 'Vagrant ' + vagrant_version
+
+- name: Install libvirt provider only when independently enabled
+  ansible.builtin.include_tasks: vagrant-libvirt.yml
+  when: vagrant_libvirt_enabled

@@ -1,0 +1,30 @@
+---
+runner_version: '2.338.0'
+github_organization: MARE-EU-Project
+github_runner_group: ''
+runner_instances: []
+docker_enabled: true
+virtualization_enabled: true
+runner_service_path: /usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+runner_allow_reconfigure: false
+runner_allow_removal: false
+# Purge permanently deletes the selected install, work directory, HOME and account.
+# Normal removal only deregisters the runner and removes its service.
+runner_purge_data: false
+runner_maintenance_confirmed: false
+# GitHub stops assigning jobs to runners more than 30 days behind a new release.
+# With updates disabled, operators must schedule timely, guarded version upgrades.
+runner_disable_update: true
+# Set an independently verified SHA-256 if the release API has no asset digest.
+runner_archive_checksums:
+  '2.338.0':
+    x64: af4b794c1bc41d73d40535e3fe092a39f9679cd8d965954c2aca25a05ca41d32
+runner_architecture: x64
+runner_archive_sha256: "{{ runner_archive_checksums.get(runner_version, {}).get(runner_architecture, '') }}"
+runner_state_dir: /var/lib/mare-runner
+runner_cache_dir: /var/cache/mare-runner
+runner_home_root: /home
+runner_api_url: https://api.github.com
+runner_github_url: https://github.com
+# Secret inputs are deliberately undefined: runner_registration_token,
+# runner_removal_token, github_api_token. Supply these through Ansible Vault.

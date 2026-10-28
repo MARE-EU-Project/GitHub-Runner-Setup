@@ -1,0 +1,11 @@
+---
+functional_tests_enabled: false
+functional_tests_confirmed: false
+functional_docker_enabled: true
+functional_compose_enabled: true
+functional_kubernetes_enabled: true
+functional_helm_enabled: true
+functional_vagrant_enabled: true
+functional_wasi_enabled: true
+functional_vagrant_storage_pool: default
+verification_path: /usr/local/bin:/usr/bin:/bin

@@ -1,0 +1,22 @@
+---
+- name: Verify installed runners without creating workloads by default
+  hosts: github_runners
+  gather_facts: true
+  any_errors_fatal: true
+  tasks:
+    - name: Load tool defaults without provisioning
+      ansible.builtin.import_role:
+        name: tools
+        tasks_from: noop
+      tags: [always]
+
+    - name: Verify runner services and optional GitHub API status
+      ansible.builtin.import_role:
+        name: runner
+        tasks_from: verify
+      tags: [runner, verification]
+
+    - name: Verify host tools and optional isolated runtime tests
+      ansible.builtin.import_role:
+        name: verification
+      tags: [verification]

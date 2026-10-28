@@ -1,0 +1,20 @@
+---
+- name: Provision persistent organization runners
+  hosts: github_runners
+  gather_facts: true
+  any_errors_fatal: true
+  tasks:
+    - name: Validate targets before making changes
+      ansible.builtin.import_role:
+        name: preflight
+      tags: [always, preflight]
+
+    - name: Install host tools and optionally initialize Minikube
+      ansible.builtin.import_role:
+        name: tools
+      tags: [tools]
+
+    - name: Install and register independent runners
+      ansible.builtin.import_role:
+        name: runner
+      tags: [runner]

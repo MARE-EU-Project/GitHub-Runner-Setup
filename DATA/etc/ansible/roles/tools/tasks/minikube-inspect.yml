@@ -1,0 +1,140 @@
+---
+- name: Validate safe profile name
+  ansible.builtin.assert:
+    that:
+      - tools_minikube_profile is string
+      - tools_minikube_profile is match('^[a-z][a-z0-9-]{0,62}$')
+    fail_msg: Minikube profiles must be lowercase DNS-style names, at most 63 characters.
+
+- name: Resolve Minikube state and isolated kubeconfig paths
+  ansible.builtin.command:
+    argv: [readlink, -m, --, "{{ item }}"]
+  loop:
+    - "/home/{{ tools_runner.user }}/.minikube"
+    - "{{ tools_minikube_kubeconfig }}"
+    - "{{ tools_minikube_marker }}"
+  register: tools_minikube_canonical
+  changed_when: false
+  check_mode: false
+
+- name: Reject symlinked Minikube state and kubeconfig ancestors
+  ansible.builtin.assert:
+    that:
+      - item.stdout == item.item
+  loop: "{{ tools_minikube_canonical.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Inspect the requested profile directory without following symlinks
+  ansible.builtin.stat:
+    path: "/home/{{ tools_runner.user }}/.minikube/profiles/{{ tools_minikube_profile }}"
+    follow: false
+  register: tools_minikube_existing
+
+- name: Inspect legacy VM state for the requested profile
+  ansible.builtin.stat:
+    path: "/home/{{ tools_runner.user }}/.minikube/machines/{{ tools_minikube_profile }}"
+    follow: false
+  register: tools_minikube_existing_machine
+
+- name: Inspect root-owned profile ownership marker
+  ansible.builtin.stat:
+    path: "{{ tools_minikube_marker }}"
+    follow: false
+  register: tools_minikube_marker_stat
+
+- name: Refuse any existing profile that does not have a trusted ownership record
+  ansible.builtin.assert:
+    that:
+      - not tools_minikube_existing.stat.exists or tools_minikube_marker_stat.stat.exists
+      - not tools_minikube_existing_machine.stat.exists or tools_minikube_marker_stat.stat.exists
+      - not (tools_minikube_existing.stat.islnk | default(false))
+      - not (tools_minikube_existing_machine.stat.islnk | default(false))
+      - >-
+        not tools_minikube_marker_stat.stat.exists or
+        (tools_minikube_marker_stat.stat.isreg | default(false) and
+        tools_minikube_marker_stat.stat.uid == 0 and
+        tools_minikube_marker_stat.stat.mode == '0644')
+    fail_msg: >-
+      Refusing to adopt or modify existing Minikube profile {{ tools_minikube_profile }}.
+      Unknown profiles and their kubeconfigs are preserved. Choose a new profile.
+
+- name: Read existing profile ownership marker
+  ansible.builtin.slurp:
+    src: "{{ tools_minikube_marker }}"
+  register: tools_minikube_marker_content
+  when: tools_minikube_marker_stat.stat.exists
+
+- name: Require exact ownership and profile configuration match
+  ansible.builtin.assert:
+    that:
+      - tools_minikube_marker_content.content | b64decode | from_json == tools_minikube_identity
+    fail_msg: >-
+      Managed Minikube profile identity or requested resources changed. No profile
+      is deleted, adopted, or resized automatically; choose a fresh profile name.
+  when: tools_minikube_marker_stat.stat.exists
+
+- name: Inspect the isolated kubeconfig before creating it
+  ansible.builtin.stat:
+    path: "{{ tools_minikube_kubeconfig }}"
+    follow: false
+  register: tools_minikube_config_stat
+
+- name: Preserve unknown kubeconfig files
+  ansible.builtin.assert:
+    that:
+      - not tools_minikube_config_stat.stat.exists or tools_minikube_marker_stat.stat.exists
+      - not (tools_minikube_config_stat.stat.islnk | default(false))
+      - not tools_minikube_config_stat.stat.exists or tools_minikube_config_stat.stat.isreg
+    fail_msg: The dedicated kubeconfig already exists without an ownership marker; it is not overwritten.
+
+- name: Verify daemon-wide Docker ownership before reserving this profile
+  ansible.builtin.script:
+    cmd: >-
+      minikube_docker_guard.py check {{ tools_minikube_profile | quote }}
+      {{ tools_runner.user | quote }} {{ tools_runner.name | quote }}
+      {{ (tools_minikube_marker + '.docker.json') | quote }}
+    executable: /usr/bin/python3
+  become: true
+  changed_when: false
+  check_mode: false
+  when: minikube_driver == 'docker'
+
+- name: Query only the managed profile status
+  become: true
+  become_user: "{{ tools_runner.user }}"
+  ansible.builtin.command:
+    argv: [/usr/local/bin/minikube, status, "--profile={{ tools_minikube_profile }}", --output=json]
+  environment:
+    HOME: "/home/{{ tools_runner.user }}"
+    DOCKER_HOST: unix:///var/run/docker.sock
+    DOCKER_CONTEXT: ""
+    MINIKUBE_HOME: "/home/{{ tools_runner.user }}/.minikube"
+    KUBECONFIG: "{{ tools_minikube_kubeconfig }}"
+    LIBVIRT_DEFAULT_URI: qemu:///system
+  register: tools_minikube_status
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: tools_minikube_existing.stat.exists
+
+- name: Require a valid status response for an existing managed profile
+  ansible.builtin.assert:
+    that:
+      - tools_minikube_status.stdout | from_json is mapping
+      - (tools_minikube_status.stdout | from_json).Host in ['Running', 'Stopped', 'Nonexistent']
+    fail_msg: Could not establish managed profile state; refusing to run minikube start blindly.
+  when: tools_minikube_existing.stat.exists
+
+- name: Collect profiles that need startup or recovery
+  ansible.builtin.set_fact:
+    tools_minikube_start_profiles: >-
+      {{ tools_minikube_start_profiles + ([tools_runner.user] if
+      (not tools_minikube_existing.stat.exists or tools_minikube_status.rc != 0) else []) }}
+
+- name: Count only new or stopped profiles requiring an additional memory allocation
+  ansible.builtin.set_fact:
+    tools_minikube_pending_allocations: >-
+      {{ tools_minikube_pending_allocations + ([tools_runner.user] if
+      (not tools_minikube_existing.stat.exists or
+      (tools_minikube_status.stdout | from_json).Host != 'Running') else []) }}

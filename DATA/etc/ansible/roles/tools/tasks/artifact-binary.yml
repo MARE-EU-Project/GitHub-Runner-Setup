@@ -1,0 +1,82 @@
+---
+- name: Validate the executable installation target
+  ansible.builtin.assert:
+    that:
+      - tools_artifact_binding.name is match('^[a-zA-Z0-9_-]+$')
+      - tools_artifact.install_dir | default('/usr/local/bin') in ['/usr/local/bin', '/usr/local/lib/docker/cli-plugins']
+      - not tools_artifact_binding.source.startswith('/')
+      - "'..' not in tools_artifact_binding.source.split('/')"
+      - "'.' not in tools_artifact_binding.source.split('/')"
+
+- name: Resolve the target directory before modifying it
+  ansible.builtin.command:
+    argv: [readlink, -m, --, "{{ tools_artifact.install_dir | default('/usr/local/bin') }}"]
+  register: tools_artifact_target_directory
+  changed_when: false
+  check_mode: false
+
+- name: Refuse symlinked executable installation directories
+  ansible.builtin.assert:
+    that:
+      - tools_artifact_target_directory.stdout == tools_artifact.install_dir | default('/usr/local/bin')
+
+- name: Determine source executable
+  ansible.builtin.set_fact:
+    tools_artifact_binary: >-
+      {{ tools_cache_dir + '/' + tools_artifact.name + '-' + tools_artifact.version + '/' + tools_artifact_binding.source
+      if tools_artifact.archive else tools_cache_dir + '/' + tools_artifact.filename }}
+
+- name: Inspect verified executable
+  ansible.builtin.stat:
+    path: "{{ tools_artifact_binary }}"
+    checksum_algorithm: sha256
+    follow: false
+  register: tools_artifact_source
+
+- name: Require an ordinary executable file in the release archive
+  ansible.builtin.assert:
+    that:
+      - tools_artifact_source.stat.isreg | default(false)
+      - not (tools_artifact_source.stat.islnk | default(false))
+
+- name: Inspect existing local executable without following symlinks
+  ansible.builtin.stat:
+    path: "{{ tools_artifact.install_dir | default('/usr/local/bin') }}/{{ tools_artifact_binding.name }}"
+    checksum_algorithm: sha256
+    follow: false
+  register: tools_artifact_existing
+
+- name: Refuse conflicting existing tools unless replacement is explicitly allowed
+  ansible.builtin.assert:
+    that:
+      - >-
+        not tools_artifact_existing.stat.exists or
+        (tools_artifact_existing.stat.isreg | default(false) and
+        tools_artifact_existing.stat.checksum | default('') == tools_artifact_source.stat.checksum) or
+        (tool_allow_upgrades and maintenance_confirmed and tools_drain_confirmed and
+        not (tools_artifact_existing.stat.isdir | default(false)))
+    fail_msg: >-
+      {{ tools_artifact.install_dir | default('/usr/local/bin') }}/{{ tools_artifact_binding.name }}
+      conflicts with the exact requested release. No file was replaced. Review
+      the existing installation and explicitly set tool_allow_upgrades=true,
+      maintenance_confirmed=true, and tools_drain_confirmed=true to replace it.
+
+- name: Ensure the root-controlled executable directory exists
+  ansible.builtin.file:
+    path: "{{ tools_artifact.install_dir | default('/usr/local/bin') }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: not tools_artifact_validate_only
+
+- name: Install verified executable atomically
+  ansible.builtin.copy:
+    src: "{{ tools_artifact_binary }}"
+    dest: "{{ tools_artifact.install_dir | default('/usr/local/bin') }}/{{ tools_artifact_binding.name }}"
+    remote_src: true
+    follow: false
+    owner: root
+    group: root
+    mode: "0755"
+  when: not tools_artifact_validate_only

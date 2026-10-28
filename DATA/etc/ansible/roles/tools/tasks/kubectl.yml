@@ -1,0 +1,12 @@
+---
+- name: Install pinned kubectl from its official release
+  ansible.builtin.include_tasks: artifact.yml
+  vars:
+    tools_artifact:
+      name: kubectl
+      version: '{{ kubectl_version }}'
+      url: "https://dl.k8s.io/release/v{{ kubectl_version }}/bin/linux/amd64/kubectl"
+      filename: "kubectl-v{{ kubectl_version }}"
+      archive: false
+      binary: kubectl
+      checksum_url: "https://dl.k8s.io/release/v{{ kubectl_version }}/bin/linux/amd64/kubectl.sha256"

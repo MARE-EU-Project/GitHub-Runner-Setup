@@ -1,0 +1,10 @@
+---
+- name: Validate runner verification settings
+  ansible.builtin.import_tasks: validate.yml
+
+- name: Verify each isolated runner
+  ansible.builtin.include_tasks: verify_instance.yml
+  loop: "{{ runner_instances }}"
+  loop_control:
+    loop_var: runner_instance
+    label: "{{ runner_instance.name }}"

@@ -1,0 +1,236 @@
+---
+- name: Validate Docker signing-key trust configuration
+  ansible.builtin.assert:
+    that:
+      - docker_apt_key_fingerprint is match('^[A-Fa-f0-9]{40}$')
+      - docker_apt_key_sha256 == '' or docker_apt_key_sha256 is match('^[A-Fa-f0-9]{64}$')
+  when: docker_package_source == 'upstream'
+
+- name: Create apt key directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: docker_package_source == 'upstream'
+
+- name: Download Docker public key to staging, not to the apt trust store
+  ansible.builtin.get_url:
+    url: "{{ docker_apt_key_url }}"
+    dest: "{{ tools_cache_dir }}/docker.asc"
+    checksum: "{{ ('sha256:' + docker_apt_key_sha256) if docker_apt_key_sha256 | length > 0 else omit }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: docker_package_source == 'upstream'
+
+- name: Create private signing-key inspection directory
+  ansible.builtin.file:
+    path: "{{ tools_cache_dir }}/gnupg"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when: docker_package_source == 'upstream'
+
+- name: Read the Docker key without importing it into a keyring
+  ansible.builtin.command:
+    argv:
+      - gpg
+      - --batch
+      - --no-options
+      - --with-colons
+      - --show-keys
+      - --fingerprint
+      - "{{ tools_cache_dir }}/docker.asc"
+  environment:
+    GNUPGHOME: "{{ tools_cache_dir }}/gnupg"
+  register: tools_docker_key
+  changed_when: false
+  check_mode: false
+  when: docker_package_source == 'upstream'
+
+- name: Verify the exact Docker primary signing-key fingerprint
+  ansible.builtin.assert:
+    that:
+      - >-
+        (tools_docker_key.stdout | regex_findall('(?m)^fpr:::::::::([A-Fa-f0-9]+):') | first | upper)
+        == (docker_apt_key_fingerprint | upper)
+      - tools_docker_key.stdout | regex_findall('(?m)^pub:') | length == 1
+    fail_msg: Downloaded Docker signing key does not match the pinned primary fingerprint.
+  when: docker_package_source == 'upstream'
+
+- name: Install verified Docker signing key
+  ansible.builtin.copy:
+    src: "{{ tools_cache_dir }}/docker.asc"
+    dest: /etc/apt/keyrings/runner-docker.asc
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  when: docker_package_source == 'upstream'
+
+- name: Install the system Python dependency for Deb822 repository management
+  ansible.builtin.include_tasks: packages.yml
+  vars:
+    tools_requested_packages: [python3-debian]
+  when: docker_package_source == 'upstream'
+
+- name: Configure official Docker apt source for the detected release
+  ansible.builtin.deb822_repository:
+    name: runner-docker
+    types: [deb]
+    uris: [https://download.docker.com/linux/ubuntu]
+    suites: ["{{ ansible_facts.distribution_release }}"]
+    components: [stable]
+    architectures: [amd64]
+    signed_by: /etc/apt/keyrings/runner-docker.asc
+    mode: "0644"
+    state: present
+    install_python_debian: false
+  register: tools_docker_repository
+  when: docker_package_source == 'upstream'
+
+- name: Remove the superseded repository file managed by this role
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/runner-docker.list
+    state: absent
+  register: tools_docker_legacy_repository
+  when: docker_package_source == 'upstream'
+
+- name: Refresh package metadata after Docker repository changes
+  ansible.builtin.apt:
+    update_cache: true
+  when:
+    - docker_package_source == 'upstream'
+    - tools_docker_repository.changed or tools_docker_legacy_repository.changed
+
+- name: Resolve exact Docker packages from the selected native release source
+  ansible.builtin.include_tasks: docker-resolve.yml
+
+- name: Inspect Docker's running state before any Docker package changes
+  ansible.builtin.command:
+    argv: [systemctl, is-active, docker.service]
+  register: tools_docker_service_before
+  changed_when: false
+  failed_when: tools_docker_service_before.rc not in [0, 3, 4]
+  check_mode: false
+
+- name: Refuse changing an active daemon without a managed installed engine package
+  ansible.builtin.assert:
+    that:
+      - tools_docker_service_before.rc != 0 or tools_docker_engine_installed_version | length > 0
+    fail_msg: >-
+      An active Docker daemon has no installed engine package from the selected
+      source. Its state is not adopted or restarted automatically.
+
+- name: Read the active local daemon version without depending on CLI API compatibility
+  ansible.builtin.uri:
+    url: http://localhost/version
+    unix_socket: /var/run/docker.sock
+    method: GET
+    use_proxy: false
+    status_code: 200
+    timeout: 15
+  register: tools_docker_server_before
+  when: tools_docker_service_before.rc == 0
+
+- name: Require a valid version response from the existing managed daemon
+  ansible.builtin.assert:
+    that:
+      - tools_docker_server_before.json is mapping
+      - tools_docker_server_before.json.Version is string
+      - tools_docker_server_before.json.Version | length > 0
+    fail_msg: Cannot establish the active Docker server version; refusing a blind update.
+  when: tools_docker_service_before.rc == 0
+
+- name: Identify an old active engine or a pending engine package replacement
+  ansible.builtin.set_fact:
+    tools_docker_daemon_old: >-
+      {{ tools_docker_service_before.rc == 0 and
+      (tools_docker_server_before.json.Version != docker_version or
+      tools_docker_engine_package_change_required) }}
+
+- name: Require explicit maintenance and a drained host before restarting an old daemon
+  ansible.builtin.assert:
+    that:
+      - not tools_docker_daemon_old or (tool_allow_upgrades and maintenance_confirmed and tools_drain_confirmed)
+      - not tools_docker_daemon_old or tools_docker_engine_package_change_required or docker_restart_pending
+    fail_msg: >-
+      Docker's active server is old or its engine package needs replacement.
+      Drain affected jobs/workloads and confirm tool_allow_upgrades,
+      maintenance_confirmed, and tools_drain_confirmed. If packages already match
+      but the old daemon remains, additionally set docker_restart_pending=true.
+      No unapproved restart is performed.
+
+- name: Install the exact validated Docker and Compose apt packages
+  ansible.builtin.include_tasks: packages.yml
+  vars:
+    tools_requested_packages: "{{ tools_docker_exact_packages | unique | list }}"
+
+- name: Record whether the Docker package transaction actually changed packages
+  ansible.builtin.set_fact:
+    tools_docker_packages_changed: "{{ tools_package_install.changed | default(false) }}"
+
+- name: Ensure Docker access group exists
+  ansible.builtin.group:
+    name: docker
+    state: present
+
+- name: Grant runner users Docker access without changing other memberships
+  ansible.builtin.user:
+    name: "{{ item.user }}"
+    groups: docker
+    append: true
+  loop: "{{ runner_instances }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Start Docker or restart only an approved old engine after package replacement
+  ansible.builtin.systemd_service:
+    name: docker
+    enabled: true
+    state: >-
+      {{ 'restarted' if tools_docker_daemon_old and
+      (tools_docker_packages_changed or docker_restart_pending) else 'started' }}
+
+- name: Verify installed Docker version
+  ansible.builtin.command:
+    argv: [/usr/bin/docker, --version]
+  register: tools_docker_runtime
+  changed_when: false
+  check_mode: false
+
+- name: Confirm the exact Docker release is active
+  ansible.builtin.assert:
+    that:
+      - tools_docker_runtime.stdout is search('version ' + (docker_version | regex_escape) + '[, ]')
+
+- name: Query the actual local Docker daemon ServerVersion
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - --host=unix:///var/run/docker.sock
+      - info
+      - --format
+      - "{{ '{{.ServerVersion}}' }}"
+  environment:
+    DOCKER_CONTEXT: ""
+    DOCKER_API_VERSION: ""
+  register: tools_docker_server_runtime
+  changed_when: false
+  check_mode: false
+
+- name: Require the requested daemon version rather than accepting a new CLI alone
+  ansible.builtin.assert:
+    that:
+      - tools_docker_server_runtime.stdout | trim == docker_version
+    fail_msg: >-
+      Docker CLI and daemon do not match the requested release. The daemon was
+      not silently accepted or unconditionally restarted. Schedule drained
+      maintenance and explicitly approve docker_restart_pending if needed.
+
+- name: Verify the Compose plugin installed with Docker
+  ansible.builtin.include_tasks: compose.yml
+  when: docker_compose_enabled

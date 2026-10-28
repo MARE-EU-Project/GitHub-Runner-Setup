@@ -1,0 +1,124 @@
+---
+- name: Validate existing runner home directories
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.ansible_facts.getent_passwd[item.item.user] is none or
+        item.ansible_facts.getent_passwd[item.item.user][4] == '/home/' + item.item.user
+    fail_msg: Existing runner accounts must use /home/USER; existing homes are never moved.
+  loop: "{{ preflight_accounts.results }}"
+  loop_control:
+    label: "{{ item.item.user }}"
+
+- name: Resolve managed cache and runner home paths without creating them
+  ansible.builtin.command:
+    argv: [readlink, -m, --, "{{ item }}"]
+  loop: >-
+    {{ [tools_cache_dir, '/usr/local/bin', runner_state_dir, runner_state_dir + '/accounts'] +
+    (runner_instances | map(attribute='user') | map('regex_replace', '^', '/home/') | list) +
+    ((runner_instances | map(attribute='user') | map('regex_replace', '^', '/home/') |
+    map('regex_replace', '$', '/.vagrant.d') | list) if vagrant_enabled else []) }}
+  register: tools_canonical_directories
+  changed_when: false
+  check_mode: false
+
+- name: Reject symlinked managed cache and home paths
+  ansible.builtin.assert:
+    that:
+      - item.stdout == item.item
+    fail_msg: "Managed tools path {{ item.item }} has a symlinked ancestor and is not modified."
+  loop: "{{ tools_canonical_directories.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Inspect existing root-controlled account state directories
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - "{{ runner_state_dir }}"
+    - "{{ runner_state_dir }}/accounts"
+  register: tools_account_state_directories
+
+- name: Refuse unsafe shared account state directories
+  ansible.builtin.assert:
+    that:
+      - >-
+        not item.stat.exists or
+        (item.stat.isdir | default(false) and item.stat.uid == 0 and
+        not (item.stat.islnk | default(false)) and item.stat.mode in ['0700', '0755'])
+    fail_msg: Shared account ownership state must be a root-owned directory, not writable by other users.
+  loop: "{{ tools_account_state_directories.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Inspect all dedicated accounts before package metadata or identity changes
+  ansible.builtin.include_tasks: account.yml
+  vars:
+    tools_account_reserve: false
+  loop: "{{ runner_instances }}"
+  loop_control:
+    loop_var: tools_runner
+    label: "{{ tools_runner.user }}"
+
+- name: Refresh Ubuntu package metadata without changing repository configuration
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Verify native Docker repositories and dependency availability before account creation
+  ansible.builtin.include_tasks: docker-native-preflight.yml
+  when: docker_enabled and docker_package_source == 'ubuntu'
+
+- name: Create root-controlled shared account ownership state
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ runner_state_dir }}"
+    - "{{ runner_state_dir }}/accounts"
+
+- name: Validate or reserve each dedicated account before creating any users
+  ansible.builtin.include_tasks: account.yml
+  vars:
+    tools_account_reserve: true
+  loop: "{{ runner_instances }}"
+  loop_control:
+    loop_var: tools_runner
+    label: "{{ tools_runner.user }}"
+
+- name: Create runner primary groups
+  ansible.builtin.group:
+    name: "{{ item.user }}"
+    state: present
+  loop: "{{ runner_instances }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Create runner users before installing per-user tools or permissions
+  ansible.builtin.user:
+    name: "{{ item.user }}"
+    group: "{{ item.user }}"
+    home: "/home/{{ item.user }}"
+    shell: /bin/bash
+    create_home: true
+    state: present
+  loop: "{{ runner_instances }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Install checked prerequisites from the selected Ubuntu release
+  ansible.builtin.include_tasks: packages.yml
+  vars:
+    tools_requested_packages: "{{ tools_ubuntu_packages[ansible_facts.distribution_release].common }}"
+
+- name: Create root-owned artifact cache
+  ansible.builtin.file:
+    path: "{{ tools_cache_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"

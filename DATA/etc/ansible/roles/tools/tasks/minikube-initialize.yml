@@ -1,0 +1,124 @@
+---
+- name: Validate standalone Minikube initialization settings
+  ansible.builtin.assert:
+    that:
+      - minikube_initialize is boolean
+      - minikube_initialize
+      - minikube_enabled is boolean
+      - kubectl_enabled is boolean
+      - minikube_enabled
+      - kubectl_enabled
+      - minikube_driver in ['docker', 'kvm2']
+      - minikube_driver != 'docker' or docker_enabled
+      - minikube_driver != 'kvm2' or virtualization_enabled
+      - minikube_cpus | int > 0
+      - minikube_memory_mb | int > 0
+      - minikube_host_reserve_memory_mb | int >= 0
+
+- name: Resolve effective profile names before inspecting or reserving resources
+  ansible.builtin.set_fact:
+    tools_minikube_profile_names: []
+
+- name: Collect effective profile names on this shared daemon
+  ansible.builtin.set_fact:
+    tools_minikube_profile_names: >-
+      {{ tools_minikube_profile_names + [item.minikube_profile |
+      default(minikube_profile + ('-' + item.name if runner_instances | length > 1 else ''))] }}
+  loop: "{{ runner_instances }}"
+
+- name: Reject duplicate effective Minikube profiles
+  ansible.builtin.assert:
+    that:
+      - tools_minikube_profile_names | unique | length == runner_instances | length
+    fail_msg: Runner instances sharing a Docker daemon must use distinct effective Minikube profile names.
+
+- name: Validate requested Minikube capacity against aggregate host capacity
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.processor_vcpus | int >= (minikube_cpus | int * runner_instances | length)
+      - >-
+        ansible_facts.memtotal_mb | int >=
+        (minikube_memory_mb | int * runner_instances | length + minikube_host_reserve_memory_mb | int)
+    fail_msg: >-
+      Insufficient aggregate resources for {{ runner_instances | length }} profiles,
+      each with {{ minikube_cpus }} CPUs and {{ minikube_memory_mb }} MiB memory,
+      plus {{ minikube_host_reserve_memory_mb }} MiB host reserve.
+
+- name: Resolve the ownership record directory before creating it
+  ansible.builtin.command:
+    argv: [readlink, -m, --, /var/lib/runner-tools/minikube]
+  register: tools_minikube_marker_directory
+  changed_when: false
+  check_mode: false
+
+- name: Refuse symlinked ownership record directories
+  ansible.builtin.assert:
+    that:
+      - tools_minikube_marker_directory.stdout == '/var/lib/runner-tools/minikube'
+
+- name: Initialize the startup and additional-allocation inventories
+  ansible.builtin.set_fact:
+    tools_minikube_start_profiles: []
+    tools_minikube_pending_allocations: []
+
+- name: Inspect every requested profile before checking available host memory
+  ansible.builtin.include_tasks: minikube-profile.yml
+  loop: "{{ runner_instances }}"
+  loop_control:
+    loop_var: tools_runner
+    label: "{{ tools_runner.name }}"
+  vars:
+    tools_minikube_phase: inspect
+
+- name: Read fresh available memory only when new or stopped profiles need allocation
+  ansible.builtin.command:
+    argv: [cat, /proc/meminfo]
+  register: tools_minikube_meminfo
+  changed_when: false
+  check_mode: false
+  when: tools_minikube_pending_allocations | length > 0
+
+- name: Require Linux MemAvailable rather than misleading free or total memory
+  ansible.builtin.assert:
+    that:
+      - tools_minikube_meminfo.stdout | regex_findall('(?m)^MemAvailable:\s+([0-9]+)\s+kB\s*$') | length == 1
+    fail_msg: Cannot establish current MemAvailable; refusing to allocate new Minikube profiles.
+  when: tools_minikube_pending_allocations | length > 0
+
+- name: Calculate currently available memory in MiB
+  ansible.builtin.set_fact:
+    tools_minikube_available_memory_mb: >-
+      {{ (tools_minikube_meminfo.stdout | regex_findall('(?m)^MemAvailable:\s+([0-9]+)\s+kB\s*$') | first | int) // 1024 }}
+  when: tools_minikube_pending_allocations | length > 0
+
+- name: Require available memory for all additional profiles plus the host reserve
+  ansible.builtin.assert:
+    that:
+      - >-
+        tools_minikube_available_memory_mb | int >=
+        (minikube_memory_mb | int * tools_minikube_pending_allocations | length +
+        minikube_host_reserve_memory_mb | int)
+    fail_msg: >-
+      Only {{ tools_minikube_available_memory_mb }} MiB is currently available;
+      {{ tools_minikube_pending_allocations | length }} new/stopped profiles require
+      {{ minikube_memory_mb | int * tools_minikube_pending_allocations | length }} MiB
+      plus {{ minikube_host_reserve_memory_mb }} MiB host reserve. Running profiles
+      are not charged twice against MemAvailable.
+  when: tools_minikube_pending_allocations | length > 0
+
+- name: Create root-owned Minikube ownership record directory
+  ansible.builtin.file:
+    path: /var/lib/runner-tools/minikube
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Initialize each isolated runner profile
+  ansible.builtin.include_tasks: minikube-profile.yml
+  loop: "{{ runner_instances }}"
+  loop_control:
+    loop_var: tools_runner
+    label: "{{ tools_runner.name }}"
+  vars:
+    tools_minikube_phase: initialize

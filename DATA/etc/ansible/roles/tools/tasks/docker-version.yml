@@ -1,0 +1,13 @@
+---
+- name: Compare Debian packaging revisions without changing the upstream release
+  ansible.builtin.command:
+    argv: [dpkg, --compare-versions, "{{ tools_docker_version_candidate }}", gt, "{{ tools_docker_selected_apt_version }}"]
+  register: tools_docker_version_comparison
+  changed_when: false
+  failed_when: tools_docker_version_comparison.rc not in [0, 1]
+  check_mode: false
+
+- name: Select the highest available packaging revision of the exact release
+  ansible.builtin.set_fact:
+    tools_docker_selected_apt_version: "{{ tools_docker_version_candidate }}"
+  when: tools_docker_version_comparison.rc == 0

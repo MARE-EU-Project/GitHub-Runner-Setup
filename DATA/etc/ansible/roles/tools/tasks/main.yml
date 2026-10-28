@@ -1,0 +1,62 @@
+---
+- name: Set up host tools with scoped privilege escalation
+  become: true
+  block:
+    - name: Validate tool configuration before making changes
+      ansible.builtin.import_tasks: validate.yml
+
+    - name: Prepare shared accounts, prerequisites and artifact cache
+      ansible.builtin.import_tasks: prepare.yml
+
+    - name: Configure Docker
+      ansible.builtin.include_tasks: docker.yml
+      when: docker_enabled
+
+    - name: Install virtualization tools
+      ansible.builtin.include_tasks: virtualization.yml
+      when: virtualization_enabled
+
+    - name: Install kubectl
+      ansible.builtin.include_tasks: kubectl.yml
+      when: kubectl_enabled
+
+    - name: Install Minikube
+      ansible.builtin.include_tasks: minikube.yml
+      when: minikube_enabled
+
+    - name: Install Helm
+      ansible.builtin.include_tasks: helm.yml
+      when: helm_enabled
+
+    - name: Install Vagrant independently of the libvirt provider
+      ansible.builtin.include_tasks: vagrant.yml
+      when: vagrant_enabled
+
+    - name: Install Wasmtime
+      ansible.builtin.include_tasks: wasmtime.yml
+      when: wasmtime_enabled
+
+    - name: Initialize isolated Minikube profiles only on request
+      ansible.builtin.include_tasks: minikube-initialize.yml
+      when: minikube_enabled and minikube_initialize
+
+    - name: Check whether package installation requires reboot
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: tools_reboot_required
+
+    - name: Report pending reboot
+      ansible.builtin.debug:
+        msg: >-
+          Reboot is required. Existing jobs are not interrupted unless
+          allow_reboot=true AND maintenance_confirmed=true.
+      when: tools_reboot_required.stat.exists
+
+    - name: Reboot only during an explicitly confirmed maintenance window
+      ansible.builtin.reboot:
+        msg: Explicitly approved runner maintenance reboot
+        reboot_timeout: 900
+      when:
+        - tools_reboot_required.stat.exists
+        - allow_reboot
+        - maintenance_confirmed

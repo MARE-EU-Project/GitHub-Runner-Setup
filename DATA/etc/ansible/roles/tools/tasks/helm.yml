@@ -1,0 +1,12 @@
+---
+- name: Install pinned helm from its official release
+  ansible.builtin.include_tasks: artifact.yml
+  vars:
+    tools_artifact:
+      name: helm
+      version: '{{ helm_version }}'
+      url: "https://get.helm.sh/helm-v{{ helm_version }}-linux-amd64.tar.gz"
+      filename: "helm-v{{ helm_version }}-linux-amd64.tar.gz"
+      archive: true
+      binary: linux-amd64/helm
+      checksum_url: "https://get.helm.sh/helm-v{{ helm_version }}-linux-amd64.tar.gz.sha256sum"

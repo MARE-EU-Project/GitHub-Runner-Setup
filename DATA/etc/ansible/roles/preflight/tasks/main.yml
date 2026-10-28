@@ -1,0 +1,228 @@
+---
+- name: Collect platform and virtualization facts
+  ansible.builtin.setup:
+    gather_subset:
+      - "!all"
+      - min
+      - hardware
+      - virtual
+
+- name: Require a supported Ubuntu release and x86_64 CPU
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.distribution == 'Ubuntu'
+      - ansible_facts.distribution_release in ['noble', 'resolute']
+      - ansible_facts.distribution_version in ['24.04', '26.04']
+      - "{'noble': '24.04', 'resolute': '26.04'}[ansible_facts.distribution_release] == ansible_facts.distribution_version"
+      - ansible_facts.architecture == 'x86_64'
+    fail_msg: Only Ubuntu 24.04 noble and Ubuntu 26.04 resolute on x86_64 are supported.
+
+- name: Validate switches and runner list
+  ansible.builtin.assert:
+    that:
+      - docker_enabled is boolean
+      - kubernetes_enabled is boolean
+      - virtualization_enabled is boolean
+      - wasmtime_enabled is boolean
+      - allow_reboot is boolean
+      - maintenance_confirmed is boolean
+      - runner_instances is sequence
+      - runner_instances is not string
+      - runner_instances is not mapping
+      - runner_instances | length > 0
+    fail_msg: Supply a nonempty runner_instances list and boolean feature switches.
+
+- name: Validate runner instance fields
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.name is defined
+      - item.user is defined
+      - item.install_dir is defined
+      - item.work_dir is defined
+      - item.labels is defined
+      - item.name is string and item.name is match('^[a-z][a-z0-9-]{0,40}$')
+      - item.user is string and item.user is match('^[a-z_][a-z0-9_-]{0,30}$')
+      - item.user not in ['root', 'ubuntu', 'runner', 'nobody']
+      - item.install_dir is string
+      - item.work_dir is string
+      - item.install_dir is match('^/(home|opt|srv|var/lib|mnt|data)/[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)*$')
+      - item.work_dir is match('^/(home|opt|srv|var/lib|mnt|data)/[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)*$')
+      - "'/../' not in item.install_dir + '/' and '/./' not in item.install_dir + '/'"
+      - "'/../' not in item.work_dir + '/' and '/./' not in item.work_dir + '/'"
+      - item.install_dir != item.work_dir
+      - not item.install_dir.startswith(item.work_dir + '/')
+      - item.install_dir != '/home/' + item.user
+      - item.work_dir != '/home/' + item.user
+      - item.labels is sequence and item.labels is not string and item.labels is not mapping
+      - item.labels | length > 0
+      - item.labels | select('string') | list | length == item.labels | length
+      - item.labels | select('match', '^[A-Za-z0-9][A-Za-z0-9_.-]*$') | list | length == item.labels | length
+      - item.minikube_profile | default('minikube') is match('^[a-z][a-z0-9-]{0,62}$')
+  loop: "{{ runner_instances }}"
+  loop_control:
+    label: "{{ item.name | default('invalid instance') }}"
+
+- name: Validate runner names declared on every inventoried runner host
+  ansible.builtin.assert:
+    that:
+      - hostvars[item].runner_instances is defined
+      - hostvars[item].runner_instances is sequence
+      - hostvars[item].runner_instances is not string
+      - hostvars[item].runner_instances is not mapping
+      - hostvars[item].runner_instances | length > 0
+      - hostvars[item].runner_instances | select('mapping') | list | length == hostvars[item].runner_instances | length
+      - hostvars[item].runner_instances | map(attribute='name') | select('defined') | list | length == hostvars[item].runner_instances | length
+      - hostvars[item].runner_instances | map(attribute='name') | select('string') | list | length == hostvars[item].runner_instances | length
+      - >-
+        hostvars[item].runner_instances | map(attribute='name') |
+        select('match', '^[a-z][a-z0-9-]{0,40}$') | list | length ==
+        hostvars[item].runner_instances | length
+    fail_msg: >-
+      Every host in github_runners must declare its runner_instances and safe names
+      in inventory, including hosts excluded by --limit.
+  loop: "{{ groups.get('github_runners', []) }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Initialize all-inventory runner name collection
+  ansible.builtin.set_fact:
+    preflight_inventory_runner_names: []
+
+- name: Collect declared runner names without applying the play host limit
+  ansible.builtin.set_fact:
+    preflight_inventory_runner_names: >-
+      {{ preflight_inventory_runner_names + (hostvars[item].runner_instances | map(attribute='name') | list) }}
+  loop: "{{ groups.get('github_runners', []) }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Require organization runner names to be unique across the full inventory
+  ansible.builtin.assert:
+    that:
+      - preflight_inventory_runner_names | unique | length == preflight_inventory_runner_names | length
+    fail_msg: >-
+      Duplicate runner names exist across github_runners inventory:
+      {{ preflight_inventory_runner_names }}. Use a unique organization runner name
+      on every host; --limit does not exempt other hosts from this check.
+
+- name: Require unique runner identities and directories
+  ansible.builtin.assert:
+    that:
+      - runner_instances | map(attribute='name') | unique | length == runner_instances | length
+      - runner_instances | map(attribute='user') | unique | length == runner_instances | length
+      - >-
+        ((runner_instances | map(attribute='install_dir') | list) +
+        (runner_instances | map(attribute='work_dir') | list)) | unique | length
+        == (runner_instances | length * 2)
+
+- name: Prevent overlapping directories between different runners
+  ansible.builtin.assert:
+    that:
+      - not item.0.install_dir.startswith(item.1.install_dir + '/')
+      - not item.0.work_dir.startswith(item.1.work_dir + '/')
+      - not item.0.install_dir.startswith(item.1.work_dir + '/')
+      - not item.0.work_dir.startswith(item.1.install_dir + '/')
+    fail_msg: Runner directories may not overlap another runner's directories.
+  loop: "{{ runner_instances | product(runner_instances) | list }}"
+  loop_control:
+    label: "{{ item.0.name }} / {{ item.1.name }}"
+  when: item.0.name != item.1.name
+
+- name: Resolve runner directories without creating them
+  ansible.builtin.command:
+    argv: [readlink, -m, --, "{{ item }}"]
+  register: preflight_canonical_directories
+  changed_when: false
+  check_mode: false
+  loop: "{{ (runner_instances | map(attribute='install_dir') | list) + (runner_instances | map(attribute='work_dir') | list) }}"
+
+- name: Reject symlinked runner directories or ancestors
+  ansible.builtin.assert:
+    that:
+      - item.stdout == item.item
+    fail_msg: "Runner directory {{ item.item }} resolves elsewhere; symlinked paths are not safe provisioning targets."
+  loop: "{{ preflight_canonical_directories.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Inspect existing runner accounts
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ item.user }}"
+    fail_key: false
+  loop: "{{ runner_instances }}"
+  register: preflight_accounts
+
+- name: Reject existing privileged runner accounts
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.ansible_facts.getent_passwd[item.item.user] is none or
+        (item.ansible_facts.getent_passwd[item.item.user][1] | int > 0 and
+        item.ansible_facts.getent_passwd[item.item.user][2] | int > 0)
+    fail_msg: Runner users must not have UID or primary GID zero.
+  loop: "{{ preflight_accounts.results }}"
+  loop_control:
+    label: "{{ item.item.user }}"
+
+- name: Inspect existing runner primary groups
+  ansible.builtin.getent:
+    database: group
+    key: "{{ item.user }}"
+    fail_key: false
+  loop: "{{ runner_instances }}"
+  register: preflight_groups
+
+- name: Reject runner groups with GID zero
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.ansible_facts.getent_group[item.item.user] is none or
+        item.ansible_facts.getent_group[item.item.user][1] | int > 0
+  loop: "{{ preflight_groups.results }}"
+  loop_control:
+    label: "{{ item.item.user }}"
+
+- name: Detect CPU virtualization extensions
+  ansible.builtin.command:
+    argv: [cat, /proc/cpuinfo]
+  register: preflight_cpuinfo
+  changed_when: false
+  check_mode: false
+
+- name: Inspect KVM device
+  ansible.builtin.stat:
+    path: /dev/kvm
+  register: preflight_kvm
+
+- name: Report virtualization capabilities
+  ansible.builtin.debug:
+    msg:
+      virtualization_type: "{{ ansible_facts.virtualization_type | default('unknown') }}"
+      virtualization_role: "{{ ansible_facts.virtualization_role | default('unknown') }}"
+      cpu_virtualization: "{{ preflight_cpuinfo.stdout is search('\\b(vmx|svm)\\b') }}"
+      kvm_device: "{{ preflight_kvm.stat.exists }}"
+
+- name: Require hardware virtualization and KVM when enabled
+  ansible.builtin.assert:
+    that:
+      - preflight_cpuinfo.stdout is search('\\b(vmx|svm)\\b')
+      - preflight_kvm.stat.exists
+      - preflight_kvm.stat.ischr | default(false)
+    fail_msg: >-
+      virtualization_enabled requires vmx/svm and a character device at /dev/kvm.
+      Enable nested virtualization on the host if this machine is a guest, or
+      explicitly disable virtualization_enabled.
+  when: virtualization_enabled
+
+- name: Inspect pending reboot
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: preflight_reboot
+
+- name: Report pending reboot without interrupting workloads
+  ansible.builtin.debug:
+    msg: >-
+      Reboot required: {{ preflight_reboot.stat.exists }}. Reboots occur only
+      when both allow_reboot and maintenance_confirmed are explicitly true.

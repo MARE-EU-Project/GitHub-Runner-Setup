@@ -1,0 +1,184 @@
+---
+- name: Inspect trusted instance ownership record
+  become: true
+  ansible.builtin.stat:
+    path: "{{ runner_state_dir }}/{{ runner_instance.name }}.json"
+    follow: false
+  register: runner_marker
+
+- name: Validate ownership record before reading it
+  ansible.builtin.assert:
+    that:
+      - not runner_marker.stat.exists or (runner_marker.stat.isreg and runner_marker.stat.uid == 0 and runner_marker.stat.mode == '0600' and not runner_marker.stat.islnk)
+    fail_msg: Refusing an untrusted runner ownership record.
+
+- name: Read trusted ownership record
+  become: true
+  ansible.builtin.slurp:
+    src: "{{ runner_state_dir }}/{{ runner_instance.name }}.json"
+  register: runner_marker_content
+  when: runner_marker.stat.exists
+
+- name: Decode previous configuration
+  ansible.builtin.set_fact:
+    runner_previous: "{{ (runner_marker_content.content | b64decode | from_json) if runner_marker.stat.exists else {} }}"
+    runner_groups: "{{ (['docker'] if docker_enabled | bool else []) + (['libvirt', 'kvm'] if virtualization_enabled | bool else []) }}"
+    runner_service_name: "mare-runner-{{ runner_instance.name }}.service"
+
+- name: Inspect installation and registration
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - "{{ runner_instance.install_dir }}"
+    - "{{ runner_instance.install_dir }}/.runner"
+    - "/etc/systemd/system/{{ runner_service_name }}"
+    - "{{ runner_instance.work_dir }}"
+    - "{{ runner_home_root }}/{{ runner_instance.user }}"
+  register: runner_paths
+
+- name: Resolve shared and private runner directory ancestors
+  ansible.builtin.set_fact:
+    runner_directory_plan: "{{ runner_instance | runner_directory_plan(runner_home_root) }}"
+
+- name: Select shared runner directory ancestors
+  ansible.builtin.set_fact:
+    runner_shared_directories: "{{ runner_directory_plan.shared }}"
+
+- name: Inspect shared runner directory ancestors
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop: "{{ runner_shared_directories }}"
+  register: runner_shared_directory_stats
+
+- name: Validate existing shared runner directory ancestors
+  ansible.builtin.assert:
+    that:
+      - not item.stat.exists or (item.stat.isdir and not item.stat.islnk and item.stat.uid == 0)
+      - not item.stat.exists or item.stat.mode[2] in ['0', '1', '4', '5']
+      - not item.stat.exists or item.stat.mode[3] in ['1', '5']
+    fail_msg: Existing shared runner ancestors must be root-owned, non-writable by other users, and traversable by every runner.
+  loop: "{{ runner_shared_directory_stats.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Check dedicated account
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ runner_instance.user }}"
+    fail_key: false
+
+- name: Check dedicated primary group
+  ansible.builtin.getent:
+    database: group
+    key: "{{ runner_instance.user }}"
+    fail_key: false
+
+- name: Inspect shared root-controlled account ownership record
+  become: true
+  ansible.builtin.stat:
+    path: "{{ runner_state_dir }}/accounts/{{ runner_instance.user }}.json"
+    follow: false
+  register: runner_account_marker
+
+- name: Validate shared ownership record before reading it
+  ansible.builtin.assert:
+    that:
+      - not runner_account_marker.stat.exists or (runner_account_marker.stat.isreg and runner_account_marker.stat.uid == 0 and runner_account_marker.stat.mode == '0600' and not runner_account_marker.stat.islnk)
+    fail_msg: Refusing an untrusted dedicated-account ownership record.
+
+- name: Read shared dedicated-account ownership record
+  become: true
+  ansible.builtin.slurp:
+    src: "{{ runner_state_dir }}/accounts/{{ runner_instance.user }}.json"
+  register: runner_account_marker_content
+  when: runner_account_marker.stat.exists
+
+- name: Define the expected dedicated-account ownership contract
+  ansible.builtin.set_fact:
+    runner_account_desired:
+      name: "{{ runner_instance.name }}"
+      user: "{{ runner_instance.user }}"
+      home: "{{ runner_home_root }}/{{ runner_instance.user }}"
+      install_dir: "{{ runner_instance.install_dir }}"
+
+- name: Reject conflicting shared account ownership
+  ansible.builtin.assert:
+    that:
+      - (runner_account_marker_content.content | b64decode | from_json) == runner_account_desired
+    fail_msg: The dedicated account ownership record belongs to a different runner configuration.
+  when: runner_account_marker.stat.exists
+
+- name: Refuse unsafe adoption or moving an existing installation
+  ansible.builtin.assert:
+    that:
+      - not runner_paths.results[0].stat.exists or (runner_paths.results[0].stat.isdir and not runner_paths.results[0].stat.islnk)
+      - not runner_paths.results[1].stat.exists or not runner_paths.results[1].stat.islnk
+      - not runner_paths.results[2].stat.exists or not runner_paths.results[2].stat.islnk
+      - not runner_paths.results[3].stat.exists or (runner_paths.results[3].stat.isdir and not runner_paths.results[3].stat.islnk and runner_paths.results[3].stat.pw_name == runner_instance.user)
+      - not runner_paths.results[3].stat.exists or runner_marker.stat.exists or runner_account_marker.stat.exists
+      - not runner_paths.results[4].stat.exists or (runner_paths.results[4].stat.isdir and not runner_paths.results[4].stat.islnk and runner_paths.results[4].stat.pw_name == runner_instance.user)
+      - not runner_paths.results[4].stat.exists or runner_marker.stat.exists or runner_account_marker.stat.exists
+      - runner_marker.stat.exists or not runner_paths.results[0].stat.exists
+      - runner_marker.stat.exists or not runner_paths.results[2].stat.exists
+      - runner_marker.stat.exists or runner_account_marker.stat.exists or ansible_facts.getent_passwd[runner_instance.user] == none
+      - runner_marker.stat.exists or runner_account_marker.stat.exists or ansible_facts.getent_group[runner_instance.user] == none
+      - ansible_facts.getent_passwd[runner_instance.user] == none or ansible_facts.getent_passwd[runner_instance.user][1] | int > 0
+      - ansible_facts.getent_passwd[runner_instance.user] == none or ansible_facts.getent_passwd[runner_instance.user][4] == runner_home_root ~ '/' ~ runner_instance.user
+      - not runner_marker.stat.exists or runner_previous.user == runner_instance.user
+      - not runner_marker.stat.exists or runner_previous.install_dir == runner_instance.install_dir
+      - not runner_marker.stat.exists or runner_previous.name == runner_instance.name
+    fail_msg: Refusing an unmanaged install/account/service, symlink, or changed instance identity.
+
+- name: Determine actual installed version without changing registration
+  become: true
+  become_user: "{{ runner_instance.user }}"
+  ansible.builtin.command:
+    argv:
+      - "{{ runner_instance.install_dir }}/bin/Runner.Listener"
+      - --version
+  register: runner_installed
+  changed_when: false
+  check_mode: false
+  when: runner_marker.stat.exists and runner_paths.results[0].stat.exists
+
+- name: Validate installed version result
+  ansible.builtin.assert:
+    that:
+      - runner_installed.stdout | trim is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+  when: runner_installed is not skipped
+
+- name: Calculate desired registration manifest
+  ansible.builtin.set_fact:
+    runner_staging_dir: "{{ runner_instance.install_dir }}.staging"
+    runner_desired:
+      name: "{{ runner_instance.name }}"
+      user: "{{ runner_instance.user }}"
+      install_dir: "{{ runner_instance.install_dir }}"
+      work_dir: "{{ runner_instance.work_dir }}"
+      labels: "{{ runner_instance.labels | sort }}"
+      organization: "{{ github_organization }}"
+      runner_group: "{{ github_runner_group }}"
+      disable_update: "{{ runner_disable_update | bool }}"
+    runner_upgrade: "{{ runner_installed is not skipped and (runner_installed.stdout | trim) is version(runner_version, '<') }}"
+
+- name: Inspect any interrupted private installation staging directory
+  become: true
+  ansible.builtin.stat:
+    path: "{{ runner_staging_dir }}"
+    follow: false
+  register: runner_staging
+
+- name: Refuse to replace an unowned installation staging directory
+  ansible.builtin.assert:
+    that:
+      - not runner_staging.stat.exists or runner_marker.stat.exists
+      - not runner_staging.stat.exists or (runner_staging.stat.isdir and not runner_staging.stat.islnk and runner_staging.stat.pw_name == runner_instance.user)
+    fail_msg: Refusing to remove an untrusted runner installation staging directory.
+
+- name: Calculate registration change
+  ansible.builtin.set_fact:
+    runner_reconfigure: "{{ runner_paths.results[1].stat.exists and runner_previous != runner_desired }}"

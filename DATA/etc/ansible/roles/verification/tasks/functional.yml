@@ -1,0 +1,73 @@
+---
+- name: Require explicit authorization even when this task file is included directly
+  ansible.builtin.assert:
+    that:
+      - functional_tests_enabled | default(false) | bool
+      - functional_tests_confirmed | default(false) | bool
+      - not ansible_check_mode
+    fail_msg: Functional tests require two explicit authorization switches and non-check-mode execution.
+
+- name: Require Docker when Compose tooling is enabled
+  ansible.builtin.assert:
+    that:
+      - not (docker_compose_enabled | default(docker_enabled | default(false)) | bool) or (docker_enabled | default(false) | bool)
+    fail_msg: docker_compose_enabled requires docker_enabled.
+
+- name: Resolve independently enabled runtime test capabilities
+  ansible.builtin.set_fact:
+    functional_docker_runtime_enabled: >-
+      {{ (docker_enabled | default(false) | bool)
+         and (functional_docker_enabled | default(true) | bool) }}
+    functional_compose_runtime_enabled: >-
+      {{ (docker_enabled | default(false) | bool)
+         and (docker_compose_enabled | default(docker_enabled | default(false)) | bool)
+         and (functional_compose_enabled | default(true) | bool) }}
+    functional_kubernetes_runtime_enabled: >-
+      {{ (kubectl_enabled | default(kubernetes_enabled | default(false)) | bool)
+         and (minikube_enabled | default(kubernetes_enabled | default(false)) | bool)
+         and (functional_kubernetes_enabled | default(true) | bool) }}
+    functional_kubernetes_scope_enabled: >-
+      {{ (kubectl_enabled | default(kubernetes_enabled | default(false)) | bool)
+         and (minikube_enabled | default(kubernetes_enabled | default(false)) | bool)
+         and ((functional_kubernetes_enabled | default(true) | bool)
+           or ((helm_enabled | default(kubernetes_enabled | default(false)) | bool)
+             and (functional_helm_enabled | default(true) | bool))) }}
+    functional_helm_runtime_enabled: >-
+      {{ (kubectl_enabled | default(kubernetes_enabled | default(false)) | bool)
+         and (minikube_enabled | default(kubernetes_enabled | default(false)) | bool)
+         and (helm_enabled | default(kubernetes_enabled | default(false)) | bool)
+         and (functional_helm_enabled | default(true) | bool) }}
+    functional_vagrant_runtime_enabled: >-
+      {{ (virtualization_enabled | default(false) | bool)
+         and (vagrant_enabled | default(virtualization_enabled | default(false)) | bool)
+         and (vagrant_libvirt_enabled | default(vagrant_enabled | default(virtualization_enabled | default(false))) | bool)
+         and (functional_vagrant_enabled | default(true) | bool) }}
+    functional_wasi_runtime_enabled: >-
+      {{ (wasmtime_enabled | default(false) | bool)
+         and (functional_wasi_enabled | default(true) | bool) }}
+
+- name: Require an explicitly selected digest-pinned application image
+  ansible.builtin.assert:
+    that:
+      - functional_container_image | default('') is match('^[a-zA-Z0-9][a-zA-Z0-9._:/-]*@sha256:[a-f0-9]{64}$')
+    fail_msg: Supply functional_container_image as a long-running application image pinned by SHA256 digest.
+  when: (functional_docker_runtime_enabled | bool) or (functional_compose_runtime_enabled | bool) or (functional_kubernetes_scope_enabled | bool)
+
+- name: Require explicit immutable Vagrant box artifacts
+  ansible.builtin.assert:
+    that:
+      - functional_vagrant_box_name | default('') is match('^[A-Za-z0-9][A-Za-z0-9._/-]*$')
+      - functional_vagrant_box_version | default('') | string is match('^[0-9]+[.][0-9]+[.][0-9]+$')
+      - functional_vagrant_box_url | default('') is match('^https://[^\\s]+$')
+      - functional_vagrant_box_sha256 | default('') is match('^[a-fA-F0-9]{64}$')
+      - functional_vagrant_storage_pool | default('default') is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+    fail_msg: Supply a libvirt-compatible box name, exact version, HTTPS URL and SHA256 checksum.
+  when: functional_vagrant_runtime_enabled | bool
+  no_log: true
+
+- name: Test enabled runtimes in each runner account
+  ansible.builtin.include_tasks: functional_account.yml
+  loop: "{{ runner_instances }}"
+  loop_control:
+    loop_var: functional_instance
+    label: Runner account

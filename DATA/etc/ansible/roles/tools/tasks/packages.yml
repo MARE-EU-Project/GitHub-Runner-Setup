@@ -1,0 +1,17 @@
+---
+# Input: tools_requested_packages, containing apt names or exact name=version.
+- name: Validate the complete package transaction and any maintenance requirements
+  ansible.builtin.include_tasks: package-preflight.yml
+
+- name: Install validated packages without changing existing configuration
+  ansible.builtin.apt:
+    name: "{{ tools_packages_needing_install }}"
+    state: present
+    install_recommends: false
+    force_apt_get: true
+    dpkg_options: force-confdef,force-confold
+    allow_downgrade: false
+    fail_on_autoremove: true
+    policy_rc_d: 101
+  register: tools_package_install
+  when: tools_packages_needing_install | length > 0

@@ -1,0 +1,7 @@
+---
+runner_instances:
+  - name: noble-build-01
+    user: ghrunner
+    install_dir: /opt/actions-runner/noble-build-01
+    work_dir: /var/lib/actions-runner/noble-build-01
+    labels: [ubuntu-24.04, docker, kvm, wasm, mare-smoke]

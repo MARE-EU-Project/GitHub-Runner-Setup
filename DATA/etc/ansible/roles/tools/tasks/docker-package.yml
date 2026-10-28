@@ -1,0 +1,90 @@
+---
+- name: Query published versions of the selected Docker package
+  ansible.builtin.command:
+    argv: [apt-cache, madison, "{{ tools_docker_package.name }}"]
+  environment:
+    LC_ALL: C
+  register: tools_docker_madison
+  changed_when: false
+  check_mode: false
+
+- name: Match only the requested upstream release with optional Debian packaging suffix
+  ansible.builtin.set_fact:
+    tools_docker_version_matches: >-
+      {{ tools_docker_madison.stdout_lines | map('split', '|') | map('map', 'trim') | map('list') |
+      selectattr('1', 'defined') | map(attribute='1') |
+      select('match', '^([0-9]+:)?' + (tools_docker_package.version | regex_escape) + '([-+].*)?$') |
+      unique | list }}
+
+- name: Fail explicitly when the exact Docker upstream release is unavailable
+  ansible.builtin.assert:
+    that:
+      - tools_docker_version_matches | length > 0
+    fail_msg: >-
+      Expected an exact {{ tools_docker_package.name }} release matching
+      {{ tools_docker_package.version }} for {{ ansible_facts.distribution_release }}
+      using {{ docker_package_source }}. Found {{ tools_docker_version_matches }}.
+      Ensure the native universe/security indexes are configured for Ubuntu
+      packages, or that upstream publishes this exact suite/release. No alternate
+      tool version or Ubuntu suite will be substituted.
+
+- name: Read an optional full apt-version pin for this package and Ubuntu release
+  ansible.builtin.set_fact:
+    tools_docker_full_version_override: >-
+      {{ docker_apt_version_overrides.get(ansible_facts.distribution_release, {}).get(tools_docker_package.name, '') }}
+
+- name: Validate any explicit full apt-version override
+  ansible.builtin.assert:
+    that:
+      - tools_docker_full_version_override is string
+      - tools_docker_full_version_override == '' or tools_docker_full_version_override in tools_docker_version_matches
+    fail_msg: >-
+      Full apt pin {{ tools_docker_full_version_override }} is unavailable or does
+      not match requested upstream {{ tools_docker_package.version }}. Available
+      exact-release revisions: {{ tools_docker_version_matches }}.
+
+- name: Initialize exact Debian version selection
+  ansible.builtin.set_fact:
+    tools_docker_selected_apt_version: "{{ tools_docker_full_version_override if tools_docker_full_version_override | length > 0 else tools_docker_version_matches[0] }}"
+
+- name: Compare all matching Debian revisions using dpkg's native version ordering
+  ansible.builtin.include_tasks: docker-version.yml
+  loop: "{{ tools_docker_version_matches }}"
+  loop_control:
+    loop_var: tools_docker_version_candidate
+  when: tools_docker_full_version_override | length == 0
+
+- name: Record exact apt version
+  ansible.builtin.set_fact:
+    tools_docker_exact_packages: "{{ tools_docker_exact_packages + [tools_docker_package.name + '=' + tools_docker_selected_apt_version] }}"
+
+- name: Inspect any installed Docker package before changing it
+  ansible.builtin.command:
+    argv: [dpkg-query, --show, "--showformat=${Status}|${Version}", "{{ tools_docker_package.name }}"]
+  register: tools_docker_installed_package
+  changed_when: false
+  failed_when: tools_docker_installed_package.rc not in [0, 1]
+  check_mode: false
+
+- name: Require opt-in before changing an installed Docker package release
+  ansible.builtin.assert:
+    that:
+      - >-
+        not tools_docker_installed_package.stdout.startswith('install ok installed|') or
+        tools_docker_installed_package.stdout == 'install ok installed|' + tools_docker_selected_apt_version or
+        (tool_allow_upgrades and maintenance_confirmed and tools_drain_confirmed)
+    fail_msg: >-
+      Existing {{ tools_docker_package.name }} differs from the requested apt release.
+      Existing daemon state is preserved. Schedule maintenance and explicitly enable
+      tool_allow_upgrades, maintenance_confirmed, and tools_drain_confirmed if
+      this package change is intended; downgrades remain forbidden.
+
+- name: Remember the installed engine package identity before any package transaction
+  ansible.builtin.set_fact:
+    tools_docker_engine_installed_version: >-
+      {{ tools_docker_installed_package.stdout.split('|', 1)[1]
+      if tools_docker_installed_package.stdout.startswith('install ok installed|') else '' }}
+    tools_docker_engine_package_change_required: >-
+      {{ tools_docker_installed_package.stdout.startswith('install ok installed|') and
+      tools_docker_installed_package.stdout != 'install ok installed|' + tools_docker_selected_apt_version }}
+  when: tools_docker_package.name == tools_docker_packages.engine

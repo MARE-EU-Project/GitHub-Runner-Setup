@@ -1,0 +1,93 @@
+---
+- name: Detect the optional SSH daemon
+  ansible.builtin.stat:
+    path: /usr/sbin/sshd
+  register: runner_sshd
+
+- name: Disable SSH authentication for the runner without changing operator access
+  become: true
+  when: runner_sshd.stat.exists
+  block:
+    - name: Refuse to deny the Ansible connection account
+      ansible.builtin.assert:
+        that:
+          - ansible_user | default('') != runner_instance.user
+        fail_msg: Connect with a separate administrator account before denying runner SSH access.
+
+    - name: Validate the existing SSH daemon configuration before changing it
+      ansible.builtin.command:
+        argv: [/usr/sbin/sshd, -t]
+      changed_when: false
+
+    - name: Inspect the SSH drop-in directory and selected account rule
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop:
+        - /etc/ssh/sshd_config.d
+        - "/etc/ssh/sshd_config.d/60-mare-runner-{{ runner_instance.user }}.conf"
+      register: runner_ssh_paths
+
+    - name: Require a trusted SSH drop-in directory and regular rule file
+      ansible.builtin.assert:
+        that:
+          - runner_ssh_paths.results[0].stat.isdir | default(false)
+          - runner_ssh_paths.results[0].stat.uid == 0
+          - not runner_ssh_paths.results[0].stat.islnk
+          - not runner_ssh_paths.results[0].stat.wgrp
+          - not runner_ssh_paths.results[0].stat.woth
+          - >-
+            not runner_ssh_paths.results[1].stat.exists or
+            (runner_ssh_paths.results[1].stat.isreg | default(false) and
+             runner_ssh_paths.results[1].stat.uid == 0 and
+             not runner_ssh_paths.results[1].stat.islnk)
+
+    - name: Read an existing account rule without exposing its contents
+      ansible.builtin.slurp:
+        src: "/etc/ssh/sshd_config.d/60-mare-runner-{{ runner_instance.user }}.conf"
+      register: runner_ssh_existing
+      no_log: true
+      when: runner_ssh_paths.results[1].stat.exists
+
+    - name: Refuse to overwrite an unmanaged SSH configuration file
+      ansible.builtin.assert:
+        that:
+          - >-
+            not runner_ssh_paths.results[1].stat.exists or
+            (runner_ssh_existing.content | b64decode).startswith('# Managed by MARE runner setup\n')
+        fail_msg: The runner SSH drop-in name is already occupied by an unmanaged file.
+      no_log: true
+
+    - name: Install a validated account-specific SSH denial
+      ansible.builtin.copy:
+        dest: "/etc/ssh/sshd_config.d/60-mare-runner-{{ runner_instance.user }}.conf"
+        content: "# Managed by MARE runner setup\nDenyUsers {{ runner_instance.user }}\n"
+        owner: root
+        group: root
+        mode: '0644'
+        validate: /usr/sbin/sshd -t -f %s
+      register: runner_ssh_written
+
+    - name: Validate the complete SSH configuration including the new denial
+      ansible.builtin.command:
+        argv: [/usr/sbin/sshd, -t]
+      changed_when: false
+
+    - name: Verify the account denial is included in the effective SSH policy
+      ansible.builtin.include_tasks: verify_ssh.yml
+
+    - name: Detect an already running SSH daemon before reloading it
+      ansible.builtin.command:
+        argv: [systemctl, is-active, ssh.service]
+      register: runner_ssh_active
+      changed_when: false
+      failed_when: false
+      when: runner_ssh_written.changed
+
+    - name: Reload only an already running SSH daemon after a validated change
+      ansible.builtin.systemd_service:
+        name: ssh.service
+        state: reloaded
+      when:
+        - runner_ssh_written.changed
+        - runner_ssh_active.rc | default(-1) == 0

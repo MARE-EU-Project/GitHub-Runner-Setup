@@ -1,0 +1,178 @@
+version: '3'
+
+vars:
+  VENV: '{{.ROOT_DIR}}/.venv'
+  INVENTORY_DIR: DATA/etc/ansible
+  INVENTORY: '{{.INVENTORY_DIR}}/hosts'
+  CONFIG: '{{.INVENTORY_DIR}}/ansible.cfg'
+  VAULT_FILE: '{{.INVENTORY_DIR}}/vault/vault.yml'
+  VAULT_PASSWORD_FILE: '{{.INVENTORY_DIR}}/vault/password'
+  VAULT_ARGS:
+    sh: |
+      if test -f {{.VAULT_PASSWORD_FILE | shellQuote}}; then
+        printf '%s\n' {{printf "--vault-password-file %q" .VAULT_PASSWORD_FILE | shellQuote}}
+      fi
+  LIMIT: ''
+
+env:
+  ANSIBLE_CONFIG: '{{.ROOT_DIR}}/DATA/etc/ansible/templates/ansible.cfg'
+  ANSIBLE_LOCAL_TEMP: '{{.ROOT_DIR}}/DATA/var/tmp/ansible'
+  PATH: '{{.VENV}}/bin:{{.PATH}}'
+
+tasks:
+  default:
+    desc: List available commands (no provisioning)
+    cmds:
+      - task --list
+
+  setup:
+    desc: Set up Ansible and run the guided runner setup
+    cmds:
+      - task: setup:runner
+
+  setup:runner:
+    desc: Guided target configuration, secure credentials, provisioning and verification
+    dir: '{{.ROOT_DIR}}'
+    interactive: true
+    silent: true
+    cmds:
+      - task: setup:ansible
+      - >-
+        {{.VENV | shellQuote}}/bin/python scripts/setup.py
+        --inventory {{.INVENTORY | shellQuote}} --config {{.CONFIG | shellQuote}}
+        --vault {{.VAULT_FILE | shellQuote}} --password-file {{.VAULT_PASSWORD_FILE | shellQuote}}
+        --limit {{.LIMIT | shellQuote}}
+
+  setup:ansible:
+    desc: Install the pinned Ansible controller into a local virtual environment
+    dir: '{{.ROOT_DIR}}'
+    status:
+      - '{{.VENV | shellQuote}}/bin/python -c "import sys, ansible; assert sys.version_info >= (3, 12) and ansible.__version__ == ''2.21.5''"'
+    cmds:
+      - python3 -c 'import sys; assert sys.version_info >= (3, 12), "Python 3.12+ is required"'
+      - python3 -m venv {{.VENV | shellQuote}}
+      - '{{.VENV | shellQuote}}/bin/python -m pip install ansible-core==2.21.5'
+
+  inventory:init:
+    desc: Initialize local DATA/etc/ansible config and inventory; preserve existing files
+    dir: '{{.ROOT_DIR}}'
+    silent: true
+    cmds:
+      - |
+        python3 - {{.INVENTORY_DIR | shellQuote}} <<'PY'
+        from pathlib import Path
+        import configparser, os, shutil, sys
+        os.umask(0o077)
+        source = Path('DATA/etc/ansible/templates')
+        destination = Path(sys.argv[1])
+        for original in sorted(source.rglob('*')):
+            relative = original.relative_to(source)
+            target = destination / ('hosts' if relative == Path('hosts.yml') else relative)
+            if original.is_file() and relative != Path('ansible.cfg'):
+                target.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    with target.open('xb') as output, original.open('rb') as input_file:
+                        shutil.copyfileobj(input_file, output)
+                    print('Created', target)
+                except FileExistsError:
+                    print('Preserved', target)
+        config = configparser.ConfigParser(interpolation=None)
+        config.read(source / 'ansible.cfg')
+        config['defaults']['inventory'] = str((destination / 'hosts').resolve())
+        config['defaults']['roles_path'] = str(Path('DATA/etc/ansible/roles').resolve())
+        try:
+            with (destination / 'ansible.cfg').open('x') as output:
+                config.write(output)
+            print('Created', destination / 'ansible.cfg')
+        except FileExistsError:
+            print('Preserved', destination / 'ansible.cfg')
+        PY
+
+  vault:create:
+    desc: Create an encrypted registration-token file using Vim
+    dir: '{{.ROOT_DIR}}'
+    interactive: true
+    silent: true
+    env:
+      EDITOR: 'vim -n -i NONE -u NONE --cmd "set nobackup nowritebackup noundofile"'
+    cmds:
+      - |
+        mkdir -p -m 0700 {{dir .VAULT_FILE | shellQuote}}
+        chmod 0700 {{dir .VAULT_FILE | shellQuote}}
+        /bin/sh -c 'umask 077; exec "$@"' mare-vault {{.VENV | shellQuote}}/bin/ansible-vault create \
+          {{range .VAULT_ARGS | splitArgs}}{{. | shellQuote}} {{end}} {{.VAULT_FILE | shellQuote}}
+
+  vault:edit:
+    desc: Edit an existing encrypted token file using Vim
+    dir: '{{.ROOT_DIR}}'
+    interactive: true
+    silent: true
+    env:
+      EDITOR: 'vim -n -i NONE -u NONE --cmd "set nobackup nowritebackup noundofile"'
+    cmds:
+      - |
+        /bin/sh -c 'umask 077; exec "$@"' mare-vault {{.VENV | shellQuote}}/bin/ansible-vault edit \
+          {{range .VAULT_ARGS | splitArgs}}{{. | shellQuote}} {{end}} {{.VAULT_FILE | shellQuote}}
+
+  inventory:
+    desc: Show the inventory graph without printing host variables
+    dir: '{{.ROOT_DIR}}'
+    interactive: true
+    silent: true
+    cmds:
+      - |
+        test -f {{.CONFIG | shellQuote}} || { echo 'Configuration missing: run task inventory:init first.' >&2; exit 1; }
+        export ANSIBLE_CONFIG={{.CONFIG | shellQuote}}
+        exec {{.VENV | shellQuote}}/bin/ansible-inventory -i {{.INVENTORY | shellQuote}} --graph
+
+  check:
+    desc: Check provisioning for an explicit LIMIT (check mode has limitations)
+    cmds:
+      - task: _playbook
+        vars: {PLAYBOOK: provision.yml, CHECK: 'true'}
+
+  provision:
+    desc: Provision only the hosts selected by LIMIT
+    cmds:
+      - task: _playbook
+        vars: {PLAYBOOK: provision.yml}
+
+  verify:
+    desc: Verify runners selected by LIMIT (functional tests remain opt-in)
+    cmds:
+      - task: _playbook
+        vars: {PLAYBOOK: verify.yml}
+
+  _playbook:
+    internal: true
+    dir: '{{.ROOT_DIR}}'
+    interactive: true
+    silent: true
+    cmds:
+      - |
+        test -n {{.LIMIT | shellQuote}} || { echo 'Set LIMIT explicitly, e.g. LIMIT=noble_runner' >&2; exit 1; }
+        test -f {{.CONFIG | shellQuote}} || { echo 'Configuration missing: run task inventory:init first.' >&2; exit 1; }
+        test -f {{.INVENTORY | shellQuote}} || { echo 'Inventory missing: run task inventory:init and configure it first.' >&2; exit 1; }
+        export ANSIBLE_CONFIG={{.CONFIG | shellQuote}}
+        set --
+        if test -f {{.VAULT_FILE | shellQuote}}; then
+          set -- --extra-vars {{printf "@%s" .VAULT_FILE | shellQuote}}
+          {{if .VAULT_ARGS}}
+          set -- "$@" {{range .VAULT_ARGS | splitArgs}}{{. | shellQuote}} {{end}}
+          {{else}}
+          set -- "$@" --ask-vault-pass
+          {{end}}
+        fi
+        exec {{.VENV | shellQuote}}/bin/ansible-playbook -i {{.INVENTORY | shellQuote}} \
+          {{printf "DATA/etc/ansible/playbooks/%s" .PLAYBOOK | shellQuote}} --limit {{.LIMIT | shellQuote}} \
+          {{if eq (default "false" .CHECK) "true"}}--check{{end}} \
+          "$@" \
+          {{range .CLI_ARGS | splitArgs}}{{. | shellQuote}} {{end}}
+
+  syntax:
+    aliases: [validate]
+    desc: Syntax-check every playbook against the non-secret example inventory
+    dir: '{{.ROOT_DIR}}'
+    cmds:
+      - for: [provision, verify, remove]
+        cmd: '{{.VENV | shellQuote}}/bin/ansible-playbook -i DATA/etc/ansible/templates/hosts.yml DATA/etc/ansible/playbooks/{{.ITEM}}.yml --syntax-check'

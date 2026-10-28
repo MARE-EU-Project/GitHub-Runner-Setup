@@ -1,0 +1,108 @@
+---
+docker_enabled: true
+kubernetes_enabled: true
+virtualization_enabled: true
+wasmtime_enabled: true
+docker_compose_enabled: "{{ docker_enabled }}"
+kubectl_enabled: "{{ kubernetes_enabled }}"
+minikube_enabled: "{{ kubernetes_enabled }}"
+helm_enabled: "{{ kubernetes_enabled }}"
+vagrant_enabled: "{{ virtualization_enabled }}"
+vagrant_libvirt_enabled: "{{ vagrant_enabled }}"
+runner_instances: []
+runner_state_dir: /var/lib/mare-runner
+runner_home_root: /home
+allow_reboot: false
+maintenance_confirmed: false
+# Operator attests that affected runner jobs and host workloads are drained.
+tools_drain_confirmed: false
+# Opt in separately when packages already match but an old daemon still runs.
+docker_restart_pending: false
+
+docker_version: "29.1.3"
+docker_compose_version: "2.40.3"
+kubectl_version: "1.37.1"
+minikube_version: "1.39.0"
+kubernetes_version: "1.37.0"
+helm_version: "4.3.0"
+vagrant_version: "2.4.9"
+vagrant_package_revision: "1"
+vagrant_libvirt_version: "0.12.2"
+vagrant_libvirt_release_sha256:
+  "0.12.2": "34c8918eb550a36522f67389c290e6349524fbde60b13f39a7014c222c376f04"
+vagrant_libvirt_gem_sha256: "{{ vagrant_libvirt_release_sha256.get(vagrant_libvirt_version, '') }}"
+wasmtime_version: "50.0.0"
+wasmtime_release_sha256:
+  "50.0.0": "77c19ee0437991f9ac7837b9c269d9c7076744f85dad263fea5214cc2723c7ff"
+
+# Select native or upstream repositories explicitly; never borrow another suite.
+docker_package_sources_by_release:
+  noble: ubuntu
+  resolute: ubuntu
+docker_package_source: "{{ docker_package_sources_by_release[ansible_facts.distribution_release] }}"
+# Pin the verified native backports separately for each Ubuntu release.
+# Removing a package entry or setting it to "" explicitly selects the highest
+# published Debian packaging revision of the exact requested upstream release.
+# Upstream package names differ, so these native pins never apply across sources.
+docker_apt_version_overrides:
+  noble:
+    docker.io: "29.1.3-0ubuntu3~24.04.2"
+    docker-compose-v2: "2.40.3+ds1-0ubuntu1~24.04.1"
+  resolute:
+    docker.io: "29.1.3-0ubuntu4.1"
+    docker-compose-v2: "2.40.3+ds1-0ubuntu1"
+tools_ubuntu_packages:
+  noble:
+    common: [ca-certificates, gnupg, tar, gzip, xz-utils, unzip, sudo, acl, python3-pip, python3-venv]
+    virtualization: [qemu-kvm, qemu-utils, dnsmasq-base, libvirt-daemon-system, libvirt-clients]
+    vagrant_libvirt_build: [libvirt-dev, build-essential, pkg-config, ruby-dev, libxml2-dev, libxslt1-dev, zlib1g-dev]
+    docker:
+      ubuntu:
+        engine: docker.io
+        cli: docker.io
+        compose: docker-compose-v2
+      upstream:
+        engine: docker-ce
+        cli: docker-ce-cli
+        compose: docker-compose-plugin
+  resolute:
+    common: [ca-certificates, gnupg, tar, gzip, xz-utils, unzip, sudo, acl, python3-pip, python3-venv]
+    virtualization: [qemu-system-x86, qemu-utils, dnsmasq-base, libvirt-daemon-system, libvirt-clients]
+    vagrant_libvirt_build: [libvirt-dev, build-essential, pkg-config, ruby-dev, libxml2-dev, libxslt1-dev, zlib1g-dev]
+    docker:
+      ubuntu:
+        engine: docker.io
+        cli: docker.io
+        compose: docker-compose-v2
+      upstream:
+        engine: docker-ce
+        cli: docker-ce-cli
+        compose: docker-compose-plugin
+
+docker_apt_key_url: https://download.docker.com/linux/ubuntu/gpg
+docker_apt_key_fingerprint: "9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+# Optional SHA256 adds a second integrity check, in addition to the fingerprint.
+docker_apt_key_sha256: ""
+tool_allow_upgrades: false
+tools_cache_dir: /var/cache/runner-tools
+# Keys: kubectl, minikube, helm, vagrant, wasmtime, docker-machine-driver-kvm2.
+# Values are 64 hex digits.
+# A configured digest takes precedence over a publisher's checksum endpoint.
+# Wasmtime defaults are version-keyed; overriding its version never reuses a digest.
+tools_artifact_sha256: {}
+
+# Optional offline mode: supply a complete reviewed transitive gem closure here.
+# Each entry is {name, version, sha256}; downloads come only from rubygems.org.
+# There must be exactly one entry per gem name, including vagrant-libvirt.
+# Empty selects the checksum-pinned local plugin gem with upstream resolution of
+# transitive dependencies (like apt dependencies, these are not a full snapshot).
+# No gems or plugins are installed as root.
+vagrant_libvirt_gems: []
+
+minikube_initialize: false
+minikube_profile: minikube
+minikube_cpus: 2
+minikube_memory_mb: 16000
+# Leave capacity for the OS and concurrent runner jobs.
+minikube_host_reserve_memory_mb: 2048
+minikube_driver: docker

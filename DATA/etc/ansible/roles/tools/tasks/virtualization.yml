@@ -1,0 +1,60 @@
+---
+- name: Install checked Ubuntu QEMU and libvirt packages
+  ansible.builtin.include_tasks: packages.yml
+  vars:
+    tools_requested_packages: "{{ tools_ubuntu_packages[ansible_facts.distribution_release].virtualization }}"
+
+- name: Ensure libvirt and KVM access groups exist
+  ansible.builtin.group:
+    name: "{{ item }}"
+    state: present
+  loop: [libvirt, kvm]
+
+- name: Grant runner users access to system libvirt and KVM
+  ansible.builtin.user:
+    name: "{{ item.user }}"
+    groups: [libvirt, kvm]
+    append: true
+  loop: "{{ runner_instances }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Enable libvirt socket activation without replacing daemon configuration
+  ansible.builtin.systemd_service:
+    name: libvirtd.socket
+    enabled: true
+    state: started
+
+- name: Verify system libvirt connectivity as every runner
+  become: true
+  become_user: "{{ item.user }}"
+  ansible.builtin.command:
+    argv: [virsh, --connect, "qemu:///system", list, --all]
+  environment:
+    HOME: "/home/{{ item.user }}"
+    LIBVIRT_DEFAULT_URI: qemu:///system
+  changed_when: false
+  check_mode: false
+  loop: "{{ runner_instances }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+# KVM_GET_API_VERSION checks real device access and the stable Linux KVM ABI.
+- name: Verify each runner can open KVM and query its API
+  become: true
+  become_user: "{{ item.user }}"
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - >-
+        import fcntl, os;
+        device = os.open('/dev/kvm', os.O_RDWR | os.O_CLOEXEC);
+        version = fcntl.ioctl(device, 0xAE00, 0);
+        os.close(device);
+        raise SystemExit(0 if version == 12 else 1)
+  changed_when: false
+  check_mode: false
+  loop: "{{ runner_instances }}"
+  loop_control:
+    label: "{{ item.user }}"

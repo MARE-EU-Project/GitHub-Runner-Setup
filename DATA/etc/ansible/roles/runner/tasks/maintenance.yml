@@ -1,0 +1,57 @@
+---
+- name: Require deliberate maintenance confirmation
+  ansible.builtin.assert:
+    that:
+      - runner_maintenance_confirmed | bool
+    fail_msg: Existing runners may be busy. Drain the runner, confirm maintenance, then retry.
+
+- name: Read existing runner identity for busy verification
+  become: true
+  ansible.builtin.slurp:
+    src: "{{ runner_instance.install_dir }}/.runner"
+  register: runner_identity_raw
+  no_log: true
+  when: runner_paths.results[1].stat.exists
+
+- name: Decode runner identity with an optional UTF-8 byte-order mark
+  ansible.builtin.set_fact:
+    runner_identity: "{{ runner_identity_raw.content | b64decode(encoding='utf-8-sig') | from_json }}"
+  no_log: true
+  when: runner_paths.results[1].stat.exists
+
+- name: Validate existing runner API identity
+  ansible.builtin.assert:
+    that:
+      - runner_identity.agentId | string is match('^[1-9][0-9]*$')
+      - runner_identity.agentName == runner_instance.name
+  no_log: true
+  when: runner_paths.results[1].stat.exists
+
+- name: Verify registered runner is idle before stopping
+  ansible.builtin.uri:
+    url: "{{ runner_api_url }}/orgs/{{ runner_previous.organization }}/actions/runners/{{ runner_identity.agentId }}"
+    method: GET
+    headers:
+      Authorization: "{{ ['Bearer', github_api_token] | join(' ') }}"
+      Accept: application/vnd.github+json
+      X-GitHub-Api-Version: '2022-11-28'
+    return_content: true
+    status_code: 200
+    unredirected_headers: [Authorization]
+  register: runner_busy_check
+  no_log: true
+  when:
+    - runner_paths.results[1].stat.exists
+    - github_api_token | default('') | length > 0
+
+- name: Refuse maintenance of a busy runner
+  ansible.builtin.assert:
+    that:
+      - not runner_busy_check.json.busy | bool
+    fail_msg: GitHub reports this runner is busy; drain it before maintenance.
+  when: runner_busy_check is not skipped
+
+- name: Explain offline maintenance responsibility
+  ansible.builtin.debug:
+    msg: No API token supplied; maintenance confirmation attests that you independently verified this runner is idle.
+  when: github_api_token | default('') | length == 0

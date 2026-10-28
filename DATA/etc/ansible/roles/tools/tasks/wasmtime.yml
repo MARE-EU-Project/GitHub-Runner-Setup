@@ -1,0 +1,13 @@
+---
+- name: Install pinned Wasmtime
+  ansible.builtin.include_tasks: artifact.yml
+  vars:
+    tools_artifact:
+      name: wasmtime
+      version: "{{ wasmtime_version }}"
+      url: "https://github.com/bytecodealliance/wasmtime/releases/download/v{{ wasmtime_version }}/wasmtime-v{{ wasmtime_version }}-x86_64-linux.tar.xz"
+      filename: "wasmtime-v{{ wasmtime_version }}-x86_64-linux.tar.xz"
+      archive: true
+      binary: "wasmtime-v{{ wasmtime_version }}-x86_64-linux/wasmtime"
+      checksum_url: ""
+      sha256: "{{ wasmtime_release_sha256.get(wasmtime_version, '') }}"

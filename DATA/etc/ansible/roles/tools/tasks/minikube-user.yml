@@ -1,0 +1,140 @@
+---
+- name: Create the root-owned profile ownership directory
+  ansible.builtin.file:
+    path: "/var/lib/runner-tools/minikube/{{ tools_runner.user }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Persist the exact profile identity before startup to allow safe retries
+  ansible.builtin.copy:
+    content: "{{ tools_minikube_identity | to_nice_json }}\n"
+    dest: "{{ tools_minikube_marker }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Create private runner Kubernetes configuration root
+  ansible.builtin.file:
+    path: "/home/{{ tools_runner.user }}/.config/runner-kubernetes"
+    state: directory
+    owner: "{{ tools_runner.user }}"
+    group: "{{ tools_runner.user }}"
+    mode: "0700"
+
+- name: Create private profile-specific kubeconfig directory
+  ansible.builtin.file:
+    path: "{{ tools_minikube_kubeconfig | dirname }}"
+    state: directory
+    owner: "{{ tools_runner.user }}"
+    group: "{{ tools_runner.user }}"
+    mode: "0700"
+
+- name: Initialize only a new isolated kubeconfig
+  ansible.builtin.copy:
+    content: ""
+    dest: "{{ tools_minikube_kubeconfig }}"
+    force: false
+    owner: "{{ tools_runner.user }}"
+    group: "{{ tools_runner.user }}"
+    mode: "0600"
+
+- name: Recheck daemon-wide ownership immediately before startup
+  ansible.builtin.script:
+    cmd: >-
+      minikube_docker_guard.py check {{ tools_minikube_profile | quote }}
+      {{ tools_runner.user | quote }} {{ tools_runner.name | quote }}
+      {{ (tools_minikube_marker + '.docker.json') | quote }}
+    executable: /usr/bin/python3
+  become: true
+  changed_when: false
+  when: minikube_driver == 'docker'
+
+- name: Start or recover only profiles identified by the read-only inspection
+  become: true
+  become_user: "{{ tools_runner.user }}"
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/minikube
+      - start
+      - "--profile={{ tools_minikube_profile }}"
+      - "--driver={{ minikube_driver }}"
+      - "--kubernetes-version=v{{ kubernetes_version }}"
+      - "--cpus={{ minikube_cpus }}"
+      - "--memory={{ minikube_memory_mb }}mb"
+      - --interactive=false
+  environment:
+    HOME: "/home/{{ tools_runner.user }}"
+    DOCKER_HOST: unix:///var/run/docker.sock
+    DOCKER_CONTEXT: ""
+    MINIKUBE_HOME: "/home/{{ tools_runner.user }}/.minikube"
+    KUBECONFIG: "{{ tools_minikube_kubeconfig }}"
+    LIBVIRT_DEFAULT_URI: qemu:///system
+  changed_when: true
+  when: tools_runner.user in tools_minikube_start_profiles
+
+- name: Verify the managed profile is fully running
+  become: true
+  become_user: "{{ tools_runner.user }}"
+  ansible.builtin.command:
+    argv: [/usr/local/bin/minikube, status, "--profile={{ tools_minikube_profile }}", --output=json]
+  environment:
+    HOME: "/home/{{ tools_runner.user }}"
+    DOCKER_HOST: unix:///var/run/docker.sock
+    DOCKER_CONTEXT: ""
+    MINIKUBE_HOME: "/home/{{ tools_runner.user }}/.minikube"
+    KUBECONFIG: "{{ tools_minikube_kubeconfig }}"
+    LIBVIRT_DEFAULT_URI: qemu:///system
+  register: tools_minikube_final_status
+  changed_when: false
+  check_mode: false
+
+- name: Assert managed cluster health
+  ansible.builtin.assert:
+    that:
+      - (tools_minikube_final_status.stdout | from_json).Host == 'Running'
+      - (tools_minikube_final_status.stdout | from_json).Kubelet == 'Running'
+      - (tools_minikube_final_status.stdout | from_json).APIServer == 'Running'
+      - (tools_minikube_final_status.stdout | from_json).Kubeconfig == 'Configured'
+
+- name: Keep the isolated kubeconfig private
+  ansible.builtin.file:
+    path: "{{ tools_minikube_kubeconfig }}"
+    owner: "{{ tools_runner.user }}"
+    group: "{{ tools_runner.user }}"
+    mode: "0600"
+
+- name: Query the exact managed Kubernetes server version
+  become: true
+  become_user: "{{ tools_runner.user }}"
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/kubectl
+      - "--kubeconfig={{ tools_minikube_kubeconfig }}"
+      - "--context={{ tools_minikube_profile }}"
+      - version
+      - --output=json
+  environment:
+    HOME: "/home/{{ tools_runner.user }}"
+  register: tools_minikube_server_version
+  changed_when: false
+  check_mode: false
+
+- name: Require the exact requested Kubernetes server release
+  ansible.builtin.assert:
+    that:
+      - (tools_minikube_server_version.stdout | from_json).serverVersion.gitVersion == 'v' + kubernetes_version
+
+- name: Record exact Docker resources after verified startup
+  ansible.builtin.script:
+    cmd: >-
+      minikube_docker_guard.py record {{ tools_minikube_profile | quote }}
+      {{ tools_runner.user | quote }} {{ tools_runner.name | quote }}
+      {{ (tools_minikube_marker + '.docker.json') | quote }}
+    executable: /usr/bin/python3
+  become: true
+  changed_when: true
+  when:
+    - minikube_driver == 'docker'
+    - tools_runner.user in tools_minikube_start_profiles

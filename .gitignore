@@ -1,0 +1,22 @@
+*.retry
+.venv/
+.idea/
+/tests/evidence/
+# Track the directory layout, reviewed templates, playbooks and roles; ignore local inventory/configuration/secrets.
+/DATA/**
+!/DATA/**/
+!/DATA/**/.gitkeep
+!/DATA/etc/ansible/templates/hosts.yml
+!/DATA/etc/ansible/templates/ansible.cfg
+!/DATA/etc/ansible/templates/group_vars/all.yml
+!/DATA/etc/ansible/templates/host_vars/noble_runner.yml
+!/DATA/etc/ansible/templates/host_vars/resolute_runner.yml
+!/DATA/etc/ansible/playbooks/provision.yml
+!/DATA/etc/ansible/playbooks/verify.yml
+!/DATA/etc/ansible/playbooks/minikube.yml
+!/DATA/etc/ansible/playbooks/remove.yml
+!/DATA/etc/ansible/roles/**
+# Keep caches and secrets ignored even inside tracked source directories.
+__pycache__/
+vault.yml
+*.vault-password

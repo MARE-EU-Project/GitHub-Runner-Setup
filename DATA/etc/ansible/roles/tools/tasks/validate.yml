@@ -1,0 +1,141 @@
+---
+- name: Require completed parent preflight before privileged provisioning
+  ansible.builtin.assert:
+    that:
+      - preflight_accounts is defined
+      - preflight_groups is defined
+      - ansible_facts.distribution == 'Ubuntu'
+      - ansible_facts.distribution_release in ['noble', 'resolute']
+      - ansible_facts.architecture == 'x86_64'
+    fail_msg: Run the preflight role before tools; no implicit duplicate preflight is executed.
+
+- name: Validate tool settings
+  ansible.builtin.assert:
+    that:
+      - tool_allow_upgrades is boolean
+      - tools_drain_confirmed is boolean
+      - docker_restart_pending is boolean
+      - not docker_restart_pending or (tool_allow_upgrades and maintenance_confirmed and tools_drain_confirmed)
+      - minikube_initialize is boolean
+      - docker_enabled is boolean
+      - docker_compose_enabled is boolean
+      - virtualization_enabled is boolean
+      - wasmtime_enabled is boolean
+      - kubectl_enabled is boolean
+      - minikube_enabled is boolean
+      - helm_enabled is boolean
+      - vagrant_enabled is boolean
+      - vagrant_libvirt_enabled is boolean
+      - not docker_compose_enabled or docker_enabled
+      - not vagrant_libvirt_enabled or (vagrant_enabled and virtualization_enabled)
+      - not minikube_initialize or (minikube_enabled and kubectl_enabled)
+      - docker_package_source in ['ubuntu', 'upstream']
+      - docker_package_sources_by_release is mapping
+      - docker_apt_version_overrides is mapping
+      - docker_apt_version_overrides.get(ansible_facts.distribution_release, {}) is mapping
+      - wasmtime_release_sha256 is mapping
+      - vagrant_libvirt_release_sha256 is mapping
+      - vagrant_libvirt_gems is sequence and vagrant_libvirt_gems is not string and vagrant_libvirt_gems is not mapping
+      - tools_artifact_sha256 is mapping
+      - tools_cache_dir is match('^/var/cache/[a-zA-Z0-9_-]+$')
+      - runner_state_dir == '/var/lib/mare-runner'
+      - runner_home_root == '/home'
+      - not minikube_initialize or minikube_driver in ['docker', 'kvm2']
+      - not minikube_initialize or minikube_driver != 'docker' or docker_enabled
+      - not minikube_initialize or minikube_driver != 'kvm2' or virtualization_enabled
+      - minikube_cpus | int > 0
+      - minikube_memory_mb | int > 0
+      - minikube_host_reserve_memory_mb | int >= 0
+
+- name: Validate exact release versions
+  ansible.builtin.assert:
+    that:
+      - item is string and item is match('^[0-9]+[.][0-9]+[.][0-9]+$')
+    fail_msg: Tool versions must be explicit numeric major.minor.patch releases.
+  loop:
+    - "{{ docker_version }}"
+    - "{{ docker_compose_version }}"
+    - "{{ kubectl_version }}"
+    - "{{ minikube_version }}"
+    - "{{ kubernetes_version }}"
+    - "{{ helm_version }}"
+    - "{{ vagrant_version }}"
+    - "{{ vagrant_libvirt_version }}"
+    - "{{ wasmtime_version }}"
+
+- name: Validate configured artifact checksums
+  ansible.builtin.assert:
+    that:
+      - item.key in ['kubectl', 'minikube', 'helm', 'vagrant', 'wasmtime', 'docker-machine-driver-kvm2']
+      - item.value is string and item.value is match('^[a-fA-F0-9]{64}$')
+  loop: "{{ tools_artifact_sha256 | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Reject Wasmtime releases affected by known compiler security advisories
+  ansible.builtin.assert:
+    that:
+      - wasmtime_version is version('36.0.19', '>=')
+      - wasmtime_version is version('37.0.0', '<') or wasmtime_version is version('43.0.1', '>=')
+    fail_msg: >-
+      Wasmtime {{ wasmtime_version }} is blocked by known compiler security advisories
+      (Cranelift silent-overflow/miscompilation; Winch sandbox-escaping access).
+      No version is substituted automatically. Select and advisory-check an exact
+      patched release (36.0.19+ on the 36.x branch, or 43.0.1+) and configure its
+      verified tools_artifact_sha256.wasmtime, or disable wasmtime_enabled.
+  when: wasmtime_enabled
+
+- name: Require an explicitly pinned Wasmtime release checksum
+  ansible.builtin.assert:
+    that:
+      - >-
+        'wasmtime' in tools_artifact_sha256 or
+        wasmtime_release_sha256.get(wasmtime_version, '') is match('^[a-fA-F0-9]{64}$')
+    fail_msg: >-
+      Set tools_artifact_sha256.wasmtime to the verified SHA256 of
+      wasmtime-v{{ wasmtime_version }}-x86_64-linux.tar.xz from the official
+      bytecodealliance/wasmtime GitHub release. No digest is guessed.
+  when: wasmtime_enabled
+
+- name: Validate the offline libvirt plugin dependency lock
+  ansible.builtin.assert:
+    that:
+      - vagrant_libvirt_gems is sequence and vagrant_libvirt_gems is not string and vagrant_libvirt_gems is not mapping
+      - vagrant_libvirt_gems | length > 0
+      - vagrant_libvirt_gems | map(attribute='name') | unique | length == vagrant_libvirt_gems | length
+      - >-
+        vagrant_libvirt_gems | selectattr('name', 'equalto', 'vagrant-libvirt') |
+        selectattr('version', 'equalto', vagrant_libvirt_version) | list | length == 1
+    fail_msg: >-
+      Nonempty vagrant_libvirt_gems selects offline mode and requires the complete
+      reviewed dependency closure, each with exact name/version/sha256, including
+      vagrant-libvirt={{ vagrant_libvirt_version }}. Unpinned network gem resolution
+      is deliberately disabled.
+  when: vagrant_libvirt_enabled and vagrant_libvirt_gems | length > 0
+
+- name: Require an exact verified digest for the standalone libvirt plugin gem
+  ansible.builtin.assert:
+    that:
+      - vagrant_libvirt_gem_sha256 is match('^[a-fA-F0-9]{64}$')
+    fail_msg: >-
+      No verified vagrant-libvirt gem digest exists for {{ vagrant_libvirt_version }}.
+      Configure vagrant_libvirt_gem_sha256 for that exact release or supply a
+      complete optional vagrant_libvirt_gems lock; no older digest is reused.
+  when: vagrant_libvirt_enabled and vagrant_libvirt_gems | length == 0
+
+- name: Validate the exact Vagrant package revision
+  ansible.builtin.assert:
+    that:
+      - vagrant_package_revision is string and vagrant_package_revision is match('^[0-9]+$')
+  when: vagrant_enabled
+
+- name: Validate every pinned plugin gem
+  ansible.builtin.assert:
+    that:
+      - item.name is string and item.name is match('^[a-zA-Z0-9_-]+$')
+      - item.version is string and item.version is match('^[0-9]+[.][0-9]+[.][0-9]+([.][0-9]+)?$')
+      - item.sha256 is string and item.sha256 is match('^[a-fA-F0-9]{64}$')
+  loop: "{{ vagrant_libvirt_gems }}"
+  loop_control:
+    label: "{{ item.name | default('invalid gem') }}"
+  when: vagrant_libvirt_enabled

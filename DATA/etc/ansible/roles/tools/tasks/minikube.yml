@@ -1,0 +1,25 @@
+---
+- name: Install pinned minikube from its official release
+  ansible.builtin.include_tasks: artifact.yml
+  vars:
+    tools_artifact:
+      name: minikube
+      version: '{{ minikube_version }}'
+      url: "https://storage.googleapis.com/minikube/releases/v{{ minikube_version }}/minikube-linux-amd64"
+      filename: "minikube-v{{ minikube_version }}-linux-amd64"
+      archive: false
+      binary: minikube
+      checksum_url: "https://storage.googleapis.com/minikube/releases/v{{ minikube_version }}/minikube-linux-amd64.sha256"
+
+- name: Install the matching Minikube KVM driver from its official release
+  ansible.builtin.include_tasks: artifact.yml
+  vars:
+    tools_artifact:
+      name: docker-machine-driver-kvm2
+      version: '{{ minikube_version }}'
+      url: "https://storage.googleapis.com/minikube/releases/v{{ minikube_version }}/docker-machine-driver-kvm2"
+      filename: "docker-machine-driver-kvm2-v{{ minikube_version }}"
+      archive: false
+      binary: docker-machine-driver-kvm2
+      checksum_url: "https://storage.googleapis.com/minikube/releases/v{{ minikube_version }}/docker-machine-driver-kvm2.sha256"
+  when: virtualization_enabled and minikube_driver == 'kvm2'
