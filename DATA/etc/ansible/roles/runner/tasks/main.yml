@@ -19,6 +19,7 @@
       - ca-certificates
       - curl
       - tar
+      - libarchive-tools
       - gzip
       - acl
       - libicu-dev
@@ -38,6 +39,9 @@
     - "{{ runner_state_dir }}"
     - "{{ runner_state_dir }}/accounts"
     - "{{ runner_cache_dir }}"
+
+- name: Install the runner-scoped archive tool without relaxing service confinement
+  ansible.builtin.include_tasks: archive-tool.yml
 
 - name: Configure isolated runners
   ansible.builtin.include_tasks: instance.yml

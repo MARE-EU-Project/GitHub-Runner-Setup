@@ -294,7 +294,7 @@
         executable: /bin/bash
       environment:
         HOME: "{{ runner_home_root }}/{{ runner_instance.user }}"
-        PATH: "{{ runner_service_path }}"
+        PATH: "{{ runner_effective_service_path }}"
         ACTIONS_RUNNER_INPUT_TOKEN: "{{ runner_fresh_token.json.token if github_api_token | default('') | length > 0 else runner_registration_token }}"
       no_log: true
       changed_when: true
@@ -336,7 +336,7 @@
     - name: Keep upstream service PATH aligned with the systemd environment
       become: true
       ansible.builtin.copy:
-        content: "{{ runner_service_path }}\n"
+        content: "{{ runner_effective_service_path }}\n"
         dest: "{{ runner_instance.install_dir }}/.path"
         owner: "{{ runner_instance.user }}"
         group: "{{ runner_instance.user }}"

@@ -1,0 +1,65 @@
+---
+- name: Manage the root-controlled runner archive tool
+  become: true
+  block:
+    - name: Resolve archive helper directory ancestors
+      ansible.builtin.command:
+        argv: [readlink, -m, --, /usr/local/libexec/mare-runner]
+      register: runner_archive_directory
+      changed_when: false
+      check_mode: false
+
+    - name: Refuse symlinked archive helper ancestors
+      ansible.builtin.assert:
+        that:
+          - runner_archive_directory.stdout == '/usr/local/libexec/mare-runner'
+
+    - name: Inspect archive helper directories before writing
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop: [/usr/local, /usr/local/libexec, /usr/local/libexec/mare-runner]
+      register: runner_archive_directories
+
+    - name: Require root-controlled archive helper directories
+      ansible.builtin.assert:
+        that:
+          - >-
+            not item.stat.exists or
+            (item.stat.isdir | default(false) and item.stat.uid == 0 and
+             item.stat.mode == '0755' and not (item.stat.islnk | default(false)))
+      loop: "{{ runner_archive_directories.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Inspect an existing archive tool path without adopting other files
+      ansible.builtin.stat:
+        path: /usr/local/libexec/mare-runner/tar
+        follow: false
+      register: runner_archive_link
+
+    - name: Preserve any conflicting archive tool
+      ansible.builtin.assert:
+        that:
+          - >-
+            not runner_archive_link.stat.exists or
+            (runner_archive_link.stat.islnk | default(false) and runner_archive_link.stat.uid == 0 and
+             runner_archive_link.stat.lnk_source == '/usr/bin/bsdtar')
+        fail_msg: Refusing to replace an unmanaged runner archive helper.
+
+    - name: Create the root-owned runner helper directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop: [/usr/local/libexec, /usr/local/libexec/mare-runner]
+
+    - name: Select libarchive tar only through the dedicated runner PATH
+      ansible.builtin.file:
+        src: /usr/bin/bsdtar
+        dest: /usr/local/libexec/mare-runner/tar
+        state: link
+        owner: root
+        group: root

@@ -24,6 +24,7 @@
     runner_previous: "{{ (runner_marker_content.content | b64decode | from_json) if runner_marker.stat.exists else {} }}"
     runner_groups: "{{ (['docker'] if docker_enabled | bool else []) + (['libvirt', 'kvm'] if virtualization_enabled | bool else []) }}"
     runner_service_name: "mare-runner-{{ runner_instance.name }}.service"
+    runner_effective_service_path: "/usr/local/libexec/mare-runner:{{ runner_service_path }}"
 
 - name: Inspect installation and registration
   become: true

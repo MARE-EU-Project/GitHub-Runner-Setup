@@ -2,6 +2,26 @@
 - name: Validate runner verification settings
   ansible.builtin.import_tasks: validate.yml
 
+- name: Inspect the root-controlled runner archive tool
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop: [/usr/local/libexec/mare-runner, /usr/local/libexec/mare-runner/tar, /usr/bin/bsdtar]
+  register: runner_archive_tool_status
+
+- name: Require the protected runner-scoped archive tool
+  ansible.builtin.assert:
+    that:
+      - runner_archive_tool_status.results[0].stat.isdir | default(false)
+      - runner_archive_tool_status.results[0].stat.uid == 0
+      - runner_archive_tool_status.results[0].stat.mode == '0755'
+      - runner_archive_tool_status.results[1].stat.islnk | default(false)
+      - runner_archive_tool_status.results[1].stat.uid == 0
+      - runner_archive_tool_status.results[1].stat.lnk_source == '/usr/bin/bsdtar'
+      - runner_archive_tool_status.results[2].stat.isreg | default(false)
+      - runner_archive_tool_status.results[2].stat.uid == 0
+      - runner_archive_tool_status.results[2].stat.mode == '0755'
+
 - name: Verify each isolated runner
   ansible.builtin.include_tasks: verify_instance.yml
   loop: "{{ runner_instances }}"

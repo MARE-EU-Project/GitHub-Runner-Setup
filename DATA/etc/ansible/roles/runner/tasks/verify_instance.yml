@@ -27,7 +27,7 @@
       - "'UnitFileState=enabled' in runner_service_status.stdout_lines"
       - "('User=' ~ runner_instance.user) in runner_service_status.stdout_lines"
       - "('Group=' ~ runner_instance.user) in runner_service_status.stdout_lines"
-      - "('PATH=' ~ runner_service_path) in runner_service_status.stdout"
+      - "('PATH=' ~ runner_effective_service_path) in runner_service_status.stdout"
       - "('HOME=' ~ runner_home_root ~ '/' ~ runner_instance.user) in runner_service_status.stdout"
       - "('TMPDIR=' ~ runner_instance.work_dir ~ '/.tmp') in runner_service_status.stdout"
       - "not (minikube_enabled | default(kubernetes_enabled | default(true)) | bool) or ('KUBECONFIG=' ~ runner_home_root ~ '/' ~ runner_instance.user ~ '/.config/runner-kubernetes/' ~ (runner_instance.minikube_profile | default((minikube_profile | default('minikube')) ~ ('-' ~ runner_instance.name if runner_instances | length > 1 else ''))) ~ '/config') in runner_service_status.stdout"
@@ -148,7 +148,7 @@
     argv: "{{ item }}"
   environment:
     HOME: "{{ runner_home_root }}/{{ runner_instance.user }}"
-    PATH: "{{ runner_service_path }}"
+    PATH: "{{ runner_effective_service_path }}"
   loop: "{{ [['id', '-u'], [runner_instance.install_dir ~ '/bin/Runner.Listener', '--version']] + ([['docker', '--version'], ['docker', 'ps', '--quiet']] if docker_enabled | bool else []) + ([['virsh', '--connect', 'qemu:///system', 'list', '--all']] if virtualization_enabled | bool else []) }}"
   register: runner_tool_checks
   changed_when: false

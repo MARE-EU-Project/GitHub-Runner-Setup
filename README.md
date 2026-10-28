@@ -543,6 +543,24 @@ KVM device access, shared temporary paths needed by Docker bind mounts, and
 executable memory needed by Wasmtime JIT remain available. Use the private
 `TMPDIR` for temporary files.
 
+Runner services prepend the root-owned `/usr/local/libexec/mare-runner` directory
+to their configured PATH. Its `tar` link selects Ubuntu's `bsdtar`
+(`libarchive-tools`) for action downloads and job tools; the host's `/usr/bin/tar`
+and operator PATH are unchanged. This preserves `RestrictSUIDSGID=yes`:
+systemd deliberately blocks `openat2` under that restriction, while Ubuntu
+26.04's GNU tar requires it for nested archive extraction. See the
+[systemd compatibility documentation](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#RestrictSUIDSGID=).
+Do not remove the restriction or replace the host tar binary to work around
+bootstrap failures. Helper installation uses the same guarded package flow,
+so dependency updates still require explicit maintenance and drain approval.
+
+The smoke workflow includes a pinned `actions/checkout`, then downloads and
+SHA256-verifies its pinned archive independently and extracts it into a fresh
+test-owned directory under the actual job confinement. It checks retained
+capability, privilege, mount, process/home visibility, SSH and set-ID denial
+controls, and removes only its own extraction directory. This cold extraction
+is required even when GitHub has already cached the action.
+
 **Docker daemon access is effectively host-root access.** Shared Docker,
 libvirt and KVM access do not provide isolation against hostile jobs. Do not
 run untrusted pull requests or mutually untrusted tenants on these hosts.
