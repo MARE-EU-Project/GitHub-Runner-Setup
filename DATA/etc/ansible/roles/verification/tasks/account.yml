@@ -22,6 +22,29 @@
   changed_when: false
   no_log: true
 
+- name: Verify Ruby action cache writes and runtime libraries as the service account
+  become: true
+  become_user: '{{ verification_instance.user }}'
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - |
+        import ctypes, pathlib, tempfile
+        for library in ('libssl.so.3', 'libcrypto.so.3', 'libyaml-0.so.2', 'libgmp.so.10', 'libz.so.1'):
+            ctypes.CDLL(library)
+        for directory in ('/opt/hostedtoolcache', '/opt/hostedtoolcache/Ruby'):
+            with tempfile.TemporaryDirectory(prefix='.mare-toolcache-check-', dir=directory) as temporary:
+                source = pathlib.Path(temporary) / 'write-test'
+                source.write_text('runner-toolcache-check')
+                target = source.with_name('renamed')
+                source.rename(target)
+                assert target.read_text() == 'runner-toolcache-check'
+  environment:
+    PATH: '{{ verification_path }}'
+    HOME: '{{ ansible_facts.getent_passwd[verification_instance.user][4] }}'
+  changed_when: false
+
 - name: Check runner service health separately from software versions
   ansible.builtin.command:
     argv:

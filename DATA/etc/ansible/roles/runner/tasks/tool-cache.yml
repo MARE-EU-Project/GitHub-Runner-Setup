@@ -1,0 +1,78 @@
+---
+- name: Provide narrowly scoped access to the fixed Ruby action cache
+  become: true
+  block:
+    - name: Require an existing nonroot cache account
+      ansible.builtin.command:
+        argv: [id, -u, '{{ runner_instance.user }}']
+      register: runner_toolcache_uid
+      changed_when: false
+      check_mode: false
+      failed_when: runner_toolcache_uid.rc != 0 or runner_toolcache_uid.stdout | int == 0
+
+    - name: Refuse symlinked tool-cache ancestors
+      ansible.builtin.command:
+        argv: [readlink, -m, --, /opt/hostedtoolcache/Ruby]
+      register: runner_toolcache_canonical
+      changed_when: false
+      check_mode: false
+      failed_when: runner_toolcache_canonical.stdout != '/opt/hostedtoolcache/Ruby'
+
+    - name: Inspect only the two cache directories
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop: [/opt/hostedtoolcache, /opt/hostedtoolcache/Ruby]
+      register: runner_toolcache_directories
+
+    - name: Preserve existing cache owners and reject unsafe paths
+      ansible.builtin.assert:
+        that:
+          - not item.stat.exists or (item.stat.isdir | default(false) and not (item.stat.islnk | default(false)))
+          - not item.stat.exists or item.stat.mode[-1] not in ['2', '3', '6', '7']
+        fail_msg: Refusing a conflicting or world-writable tool cache; inspect it before proceeding.
+      loop: '{{ runner_toolcache_directories.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Create only missing cache directories without changing existing owners
+      ansible.builtin.file:
+        path: '{{ item.item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      when: not item.stat.exists
+      loop: '{{ runner_toolcache_directories.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Read access ACLs without traversing cached tools
+      ansible.builtin.command:
+        argv: [getfacl, --omit-header, --numeric, --absolute-names, '{{ item }}']
+      loop: [/opt/hostedtoolcache, /opt/hostedtoolcache/Ruby]
+      register: runner_toolcache_acls
+      changed_when: false
+      check_mode: false
+      when: not ansible_check_mode or item in (runner_toolcache_directories.results | selectattr('stat.exists') | map(attribute='item') | list)
+
+    - name: Refuse to expand a restrictive ACL mask for unrelated accounts
+      ansible.builtin.assert:
+        that:
+          - item.stdout_lines | select('match', '^mask::') | list in [[], ['mask::rwx']]
+        fail_msg: The cache has a restrictive ACL mask; preserve other accounts' effective permissions and reconcile it explicitly.
+      loop: '{{ runner_toolcache_acls.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+      when: not item.skipped | default(false)
+
+    - name: Grant only the dedicated account cache directory access
+      ansible.builtin.command:
+        argv: [setfacl, --modify, 'u:{{ runner_toolcache_uid.stdout | trim }}:rwx', --, '{{ item.item }}']
+      when:
+        - not item.skipped | default(false)
+        - ('user:' ~ (runner_toolcache_uid.stdout | trim) ~ ':rwx') not in item.stdout_lines
+      loop: '{{ runner_toolcache_acls.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+      changed_when: true

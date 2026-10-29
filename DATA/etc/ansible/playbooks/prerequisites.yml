@@ -36,3 +36,12 @@
         loop_var: tools_runner
         label: '{{ tools_runner.name }}'
       when: minikube_enabled | bool and minikube_initialize | default(false) | bool
+
+    - name: Provision action tool-cache access without changing runner services
+      ansible.builtin.include_role:
+        name: runner
+        tasks_from: tool-cache
+      loop: '{{ runner_instances }}'
+      loop_control:
+        loop_var: runner_instance
+        label: '{{ runner_instance.name }}'

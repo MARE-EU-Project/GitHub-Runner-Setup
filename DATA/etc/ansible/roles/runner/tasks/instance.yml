@@ -141,6 +141,9 @@
     - name: Deny SSH login to the dedicated service account
       ansible.builtin.include_tasks: ssh.yml
 
+    - name: Allow the service account to install Ruby action toolchains
+      ansible.builtin.include_tasks: tool-cache.yml
+
     - name: Verify the service account can traverse shared directory ancestors
       become: true
       become_user: "{{ runner_instance.user }}"

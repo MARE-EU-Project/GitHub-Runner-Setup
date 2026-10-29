@@ -26,6 +26,8 @@
       - libssl-dev
       - libkrb5-3
       - zlib1g
+      - libyaml-0-2
+      - libgmp10
 
 - name: Create root-controlled runner state directories
   become: true
