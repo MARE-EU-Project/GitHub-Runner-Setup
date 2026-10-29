@@ -8,6 +8,9 @@
     - name: Prepare shared accounts, prerequisites and artifact cache
       ansible.builtin.import_tasks: prepare.yml
 
+    - name: Install ShellCheck for catalogue and harness lint gates
+      ansible.builtin.include_tasks: shellcheck.yml
+
     - name: Configure Docker
       ansible.builtin.include_tasks: docker.yml
       when: docker_enabled

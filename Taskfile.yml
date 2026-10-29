@@ -143,6 +143,12 @@ tasks:
       - task: _playbook
         vars: {PLAYBOOK: labels.yml}
 
+  prerequisites:
+    desc: Install job prerequisites and reconcile existing private runner contexts
+    cmds:
+      - task: _playbook
+        vars: {PLAYBOOK: prerequisites.yml}
+
   maintenance:docker:
     desc: Migrate one Ubuntu Docker host to upstream packages during explicit maintenance
     cmds:
@@ -186,5 +192,5 @@ tasks:
     desc: Syntax-check every playbook against the non-secret example inventory
     dir: '{{.ROOT_DIR}}'
     cmds:
-      - for: [provision, verify, remove, docker-migrate, labels]
+      - for: [provision, verify, remove, docker-migrate, labels, prerequisites]
         cmd: '{{.VENV | shellQuote}}/bin/ansible-playbook -i DATA/etc/ansible/templates/hosts.yml DATA/etc/ansible/playbooks/{{.ITEM}}.yml --syntax-check'

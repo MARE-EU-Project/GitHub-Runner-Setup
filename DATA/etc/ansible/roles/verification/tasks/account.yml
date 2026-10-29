@@ -104,6 +104,50 @@
   when: virtualization_enabled | default(false) | bool
   no_log: true
 
+- name: Verify the runner-private Kubernetes context and default profile
+  become: true
+  become_user: '{{ verification_instance.user }}'
+  vars:
+    verification_minikube_profile: "{{ verification_instance.minikube_profile | default(minikube_profile + ('-' + verification_instance.name if runner_instances | length > 1 else '')) }}"
+  environment:
+    PATH: '{{ verification_path }}'
+    HOME: '/home/{{ verification_instance.user }}'
+    KUBECONFIG: '/home/{{ verification_instance.user }}/.config/runner-kubernetes/{{ verification_minikube_profile }}/config'
+    MINIKUBE_PROFILE: '{{ verification_minikube_profile }}'
+  when: minikube_enabled | default(false) | bool and minikube_initialize | default(false) | bool
+  block:
+    - name: Require the harness-compatible private context
+      ansible.builtin.command:
+        argv: [kubectl, config, current-context]
+      register: verification_job_context
+      changed_when: false
+      failed_when: verification_job_context.rc != 0 or verification_job_context.stdout | trim != 'minikube'
+
+    - name: Require a Ready node in the intended cluster
+      ansible.builtin.command:
+        argv: [kubectl, wait, --for=condition=Ready, node, --all, --timeout=30s]
+      changed_when: false
+
+    - name: Verify default Minikube invocation resolves the owned profile
+      ansible.builtin.command:
+        argv: [minikube, status, --output=json]
+      register: verification_job_profile
+      changed_when: false
+      failed_when: >-
+        verification_job_profile.rc != 0 or
+        (verification_job_profile.stdout | from_json).Name != verification_minikube_profile or
+        (verification_job_profile.stdout | from_json).APIServer != 'Running'
+
+    - name: Verify the harness's explicit default-profile alias
+      ansible.builtin.command:
+        argv: [minikube, -p, minikube, status, --output=json]
+      register: verification_job_profile_alias
+      changed_when: false
+      failed_when: >-
+        verification_job_profile_alias.rc != 0 or
+        (verification_job_profile_alias.stdout | from_json).Name != verification_minikube_profile or
+        (verification_job_profile_alias.stdout | from_json).APIServer != 'Running'
+
 - name: Assemble a version-only account inventory
   ansible.builtin.set_fact:
     verification_account_tools: >-

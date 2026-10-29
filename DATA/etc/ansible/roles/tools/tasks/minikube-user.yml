@@ -138,3 +138,6 @@
   when:
     - minikube_driver == 'docker'
     - tools_runner.user in tools_minikube_start_profiles
+
+- name: Expose the managed cluster through the runner-only Minikube context
+  ansible.builtin.include_tasks: minikube-job-context.yml

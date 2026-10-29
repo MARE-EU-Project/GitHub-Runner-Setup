@@ -609,6 +609,26 @@ pinned release. WASI HTTP needs a compatible WASI HTTP component and explicit
 not an HTTP service. No Rust SDK, Emscripten, WasmEdge or unrelated toolchain is
 installed. Grant filesystem/network capabilities only as required by a workload.
 
+## Runner job prerequisites
+
+`task setup:runner` installs ShellCheck and exposes the managed cluster as context
+`minikube` only inside each runner's private kubeconfig. The existing named cluster
+and service `MINIKUBE_PROFILE` are preserved, so default Minikube commands target
+that runner's cluster. Administrator kubeconfigs and unrelated profiles are untouched.
+The root-owned command on the runner-only PATH also maps explicit `-p minikube`
+requests to that same owned profile. It preserves remote command arguments and
+does not rename, recreate or adopt another Minikube cluster. Provisioning continues
+to use the real `/usr/local/bin/minikube` directly.
+
+For existing hosts, `task prerequisites LIMIT=<host>` applies only these prerequisites,
+without upgrading Docker or restarting the runner. Context changes refuse active
+jobs; retry after the selected runner is idle. `task verify LIMIT=<host>` checks
+ShellCheck, the selected context, the Ready node and default Minikube profile.
+
+ShellCheck uses the native stable package on Ubuntu 26.04 and the checksum-pinned
+official release where the native package is older. Existing newer releases are
+never downgraded. Runner umask, capability restrictions and NoNewPrivileges stay enabled.
+
 ## Runner labels
 
 `task setup:runner` manages labels automatically. GitHub supplies `self-hosted`,

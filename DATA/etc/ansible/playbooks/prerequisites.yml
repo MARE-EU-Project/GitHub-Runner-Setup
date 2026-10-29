@@ -1,0 +1,38 @@
+---
+- name: Reconcile job prerequisites without upgrading or restarting runtimes
+  hosts: github_runners
+  gather_facts: true
+  tasks:
+    - name: Load the normal tool defaults
+      ansible.builtin.import_role:
+        name: tools
+        tasks_from: noop
+
+    - name: Require a supported runner target
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.distribution == 'Ubuntu'
+          - ansible_facts.distribution_release in ['noble', 'resolute']
+          - ansible_facts.architecture == 'x86_64'
+          - runner_instances | length > 0
+
+    - name: Install ShellCheck through normal guarded tool provisioning
+      ansible.builtin.include_role:
+        name: tools
+        tasks_from: shellcheck
+        apply:
+          become: true
+
+    - name: Configure only existing runner-owned Kubernetes contexts
+      ansible.builtin.include_role:
+        name: tools
+        tasks_from: minikube-job-context
+      vars:
+        tools_minikube_profile: '{{ tools_runner.minikube_profile | default(minikube_profile) }}'
+        tools_minikube_kubeconfig: '/home/{{ tools_runner.user }}/.config/runner-kubernetes/{{ tools_minikube_profile }}/config'
+        tools_minikube_marker: '/var/lib/runner-tools/minikube/{{ tools_runner.user }}/{{ tools_minikube_profile }}.json'
+      loop: '{{ runner_instances }}'
+      loop_control:
+        loop_var: tools_runner
+        label: '{{ tools_runner.name }}'
+      when: minikube_enabled | bool and minikube_initialize | default(false) | bool

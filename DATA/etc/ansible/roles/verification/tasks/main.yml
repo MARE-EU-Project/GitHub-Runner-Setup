@@ -14,6 +14,11 @@
 - name: Define the software verification catalog
   ansible.builtin.set_fact:
     verification_tools:
+      - name: shellcheck
+        enabled: true
+        command: [shellcheck, --version]
+        version: "{{ shellcheck_version }}"
+        source: https://github.com/koalaman/shellcheck
       - name: docker
         enabled: "{{ docker_enabled | default(false) | bool }}"
         command: [docker, --version]

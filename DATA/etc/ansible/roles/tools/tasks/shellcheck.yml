@@ -1,0 +1,62 @@
+---
+- name: Install the stable native ShellCheck package where available
+  ansible.builtin.include_tasks: packages.yml
+  vars:
+    tools_requested_packages: [shellcheck]
+  when: ansible_facts.distribution_release == 'resolute'
+
+- name: Read the ShellCheck release selected by the job PATH
+  ansible.builtin.command:
+    argv: [/bin/sh, -c, 'command -v shellcheck >/dev/null && shellcheck --version']
+  environment:
+    PATH: /usr/local/libexec/mare-runner:/usr/local/bin:/usr/bin:/bin
+  register: tools_shellcheck_current
+  changed_when: false
+  failed_when: tools_shellcheck_current.rc not in [0, 1, 127]
+  check_mode: false
+
+- name: Resolve the installed ShellCheck version
+  ansible.builtin.set_fact:
+    tools_shellcheck_installed: "{{ (tools_shellcheck_current.stdout | regex_findall('(?m)^version: ([0-9]+[.][0-9]+[.][0-9]+)$') | first) | default('') }}"
+
+- name: Refuse an unrecognized release or a ShellCheck downgrade
+  ansible.builtin.assert:
+    that:
+      - tools_shellcheck_current.rc != 0 or tools_shellcheck_installed | length > 0
+      - tools_shellcheck_installed | length == 0 or tools_shellcheck_installed is version(shellcheck_version, '<=')
+    fail_msg: Update the explicit ShellCheck pin; existing releases are never downgraded.
+
+- name: Create the normal verified artifact cache when needed
+  ansible.builtin.file:
+    path: '{{ tools_cache_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: tools_shellcheck_installed != shellcheck_version
+
+- name: Install the exact upstream release when native packages do not match
+  ansible.builtin.include_tasks: artifact.yml
+  vars:
+    tools_artifact:
+      name: shellcheck
+      version: '{{ shellcheck_version }}'
+      url: 'https://github.com/koalaman/shellcheck/releases/download/v{{ shellcheck_version }}/shellcheck-v{{ shellcheck_version }}.linux.x86_64.tar.xz'
+      filename: 'shellcheck-v{{ shellcheck_version }}.linux.x86_64.tar.xz'
+      archive: true
+      binary: 'shellcheck-v{{ shellcheck_version }}/shellcheck'
+      checksum_url: ''
+      sha256: "{{ shellcheck_release_sha256.get(shellcheck_version, '') }}"
+  when: tools_shellcheck_installed != shellcheck_version
+
+- name: Require the pinned ShellCheck release on the job PATH
+  ansible.builtin.command:
+    argv: [shellcheck, --version]
+  environment:
+    PATH: /usr/local/libexec/mare-runner:/usr/local/bin:/usr/bin:/bin
+  register: tools_shellcheck_verified
+  changed_when: false
+  failed_when: >-
+    tools_shellcheck_verified.rc != 0 or
+    tools_shellcheck_verified.stdout is not search('(?m)^version: ' ~ (shellcheck_version | regex_escape) ~ '$')
+  when: not ansible_check_mode

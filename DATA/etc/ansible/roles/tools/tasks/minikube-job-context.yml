@@ -1,0 +1,155 @@
+---
+- name: Inspect the profile's root-controlled ownership record
+  become: true
+  ansible.builtin.stat:
+    path: '{{ tools_minikube_marker }}'
+    follow: false
+  register: tools_job_profile_marker
+
+- name: Require a trusted managed profile before configuring job access
+  ansible.builtin.assert:
+    that:
+      - tools_job_profile_marker.stat.isreg | default(false)
+      - tools_job_profile_marker.stat.uid == 0
+      - not tools_job_profile_marker.stat.islnk | default(false)
+      - tools_job_profile_marker.stat.mode in ['0600', '0644']
+
+- name: Read the managed profile identity
+  become: true
+  ansible.builtin.slurp:
+    src: '{{ tools_minikube_marker }}'
+  register: tools_job_profile_identity
+
+- name: Require the selected runner and profile ownership
+  ansible.builtin.assert:
+    that:
+      - (tools_job_profile_identity.content | b64decode | from_json).runner == tools_runner.name
+      - (tools_job_profile_identity.content | b64decode | from_json).user == tools_runner.user
+      - (tools_job_profile_identity.content | b64decode | from_json).profile == tools_minikube_profile
+
+- name: Inspect this runner's private kubeconfig
+  become: true
+  ansible.builtin.stat:
+    path: '{{ tools_minikube_kubeconfig }}'
+    follow: false
+  register: tools_job_kubeconfig_stat
+
+- name: Resolve the private kubeconfig path before changing contexts
+  become: true
+  become_user: '{{ tools_runner.user }}'
+  ansible.builtin.command:
+    argv: [readlink, -m, --, '{{ tools_minikube_kubeconfig }}']
+  register: tools_job_kubeconfig_path
+  changed_when: false
+  check_mode: false
+
+- name: Require a private runner-owned configuration file
+  ansible.builtin.assert:
+    that:
+      - tools_job_kubeconfig_stat.stat.isreg | default(false)
+      - not tools_job_kubeconfig_stat.stat.islnk | default(false)
+      - tools_job_kubeconfig_stat.stat.pw_name == tools_runner.user
+      - tools_job_kubeconfig_stat.stat.mode == '0600'
+      - tools_job_kubeconfig_path.stdout == tools_minikube_kubeconfig
+
+- name: Read context identities without exposing credentials
+  become: true
+  become_user: '{{ tools_runner.user }}'
+  ansible.builtin.command:
+    argv: [/usr/local/bin/kubectl, '--kubeconfig={{ tools_minikube_kubeconfig }}', config, view, --output=json]
+  environment:
+    HOME: '/home/{{ tools_runner.user }}'
+  register: tools_job_kubeconfig
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Select only the already-managed context
+  ansible.builtin.set_fact:
+    tools_job_source_contexts: "{{ (tools_job_kubeconfig.stdout | from_json).contexts | selectattr('name', 'equalto', tools_minikube_profile) | list }}"
+    tools_job_alias_contexts: "{{ (tools_job_kubeconfig.stdout | from_json).contexts | selectattr('name', 'equalto', 'minikube') | list }}"
+  no_log: true
+
+- name: Refuse an unrelated pre-existing Minikube alias
+  ansible.builtin.assert:
+    that:
+      - tools_job_source_contexts | length == 1
+      - tools_job_alias_contexts | length <= 1
+      - tools_job_alias_contexts | length == 0 or tools_job_alias_contexts[0].context.cluster == tools_job_source_contexts[0].context.cluster
+      - tools_job_alias_contexts | length == 0 or tools_job_alias_contexts[0].context.user == tools_job_source_contexts[0].context.user
+      - tools_job_alias_contexts | length == 0 or (tools_job_alias_contexts[0].context.namespace | default('default')) == (tools_job_source_contexts[0].context.namespace | default('default'))
+    fail_msg: Refusing to repoint a pre-existing Minikube context to another cluster.
+
+- name: Check for active jobs before changing the private context
+  become: true
+  ansible.builtin.command:
+    argv: [pgrep, -u, '{{ tools_runner.user }}', -x, Runner.Worker]
+  register: tools_job_context_workers
+  changed_when: false
+  check_mode: false
+  failed_when: tools_job_context_workers.rc not in [0, 1]
+  when: tools_job_alias_contexts | length == 0 or (tools_job_kubeconfig.stdout | from_json)['current-context'] != 'minikube'
+
+- name: Leave active jobs' context configuration unchanged
+  ansible.builtin.assert:
+    that: [tools_job_context_workers.rc == 1]
+    fail_msg: Runner is busy; retry prerequisite reconciliation after its current job finishes. No service restart is needed.
+  when: tools_job_alias_contexts | length == 0 or (tools_job_kubeconfig.stdout | from_json)['current-context'] != 'minikube'
+
+- name: Add the job context only to this runner's private kubeconfig
+  become: true
+  become_user: '{{ tools_runner.user }}'
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/kubectl
+      - '--kubeconfig={{ tools_minikube_kubeconfig }}'
+      - config
+      - set-context
+      - minikube
+      - '--cluster={{ tools_job_source_contexts[0].context.cluster }}'
+      - '--user={{ tools_job_source_contexts[0].context.user }}'
+      - '--namespace={{ tools_job_source_contexts[0].context.namespace | default("default") }}'
+  environment:
+    HOME: '/home/{{ tools_runner.user }}'
+  when: tools_job_alias_contexts | length == 0
+  changed_when: true
+
+- name: Select the dedicated context without changing any unrelated kubeconfig
+  become: true
+  become_user: '{{ tools_runner.user }}'
+  ansible.builtin.command:
+    argv: [/usr/local/bin/kubectl, '--kubeconfig={{ tools_minikube_kubeconfig }}', config, use-context, minikube]
+  environment:
+    HOME: '/home/{{ tools_runner.user }}'
+  when: (tools_job_kubeconfig.stdout | from_json)['current-context'] != 'minikube'
+  changed_when: true
+
+- name: Inspect the runner-only command directory
+  become: true
+  ansible.builtin.stat:
+    path: /usr/local/libexec/mare-runner
+    follow: false
+  register: tools_job_commands
+
+- name: Require a trusted runner-only command directory
+  ansible.builtin.assert:
+    that:
+      - not tools_job_commands.stat.exists or (tools_job_commands.stat.isdir and not tools_job_commands.stat.islnk and tools_job_commands.stat.uid == 0 and tools_job_commands.stat.mode == '0755')
+
+- name: Create the private service PATH prefix when provisioning a new runner
+  become: true
+  ansible.builtin.file:
+    path: /usr/local/libexec/mare-runner
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Map explicit default-profile requests only on the runner service PATH
+  become: true
+  ansible.builtin.copy:
+    src: runner_minikube.py
+    dest: /usr/local/libexec/mare-runner/minikube
+    owner: root
+    group: root
+    mode: '0755'

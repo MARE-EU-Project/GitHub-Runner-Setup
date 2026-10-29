@@ -16,6 +16,9 @@ allow_reboot: false
 maintenance_confirmed: false
 # Operator attests that affected runner jobs and host workloads are drained.
 tools_drain_confirmed: false
+shellcheck_version: "0.11.0"
+shellcheck_release_sha256:
+  "0.11.0": "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
 # Opt in separately when packages already match but an old daemon still runs.
 docker_restart_pending: false
 
@@ -68,7 +71,7 @@ tools_ubuntu_packages:
         cli: docker-ce-cli
         compose: docker-compose-plugin
   resolute:
-    common: [ca-certificates, gnupg, tar, gzip, xz-utils, unzip, sudo, acl, python3-pip, python3-venv]
+    common: [ca-certificates, gnupg, tar, gzip, xz-utils, unzip, sudo, acl, python3-pip, python3-venv, shellcheck]
     virtualization: [qemu-system-x86, qemu-utils, dnsmasq-base, libvirt-daemon-system, libvirt-clients]
     vagrant_libvirt_build: [libvirt-dev, build-essential, pkg-config, ruby-dev, libxml2-dev, libxslt1-dev, zlib1g-dev]
     docker:
@@ -87,7 +90,7 @@ docker_apt_key_fingerprint: "9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
 docker_apt_key_sha256: ""
 tool_allow_upgrades: false
 tools_cache_dir: /var/cache/runner-tools
-# Keys: kubectl, minikube, helm, vagrant, wasmtime, docker-machine-driver-kvm2.
+# Keys: shellcheck, kubectl, minikube, helm, vagrant, wasmtime, docker-machine-driver-kvm2.
 # Values are 64 hex digits.
 # A configured digest takes precedence over a publisher's checksum endpoint.
 # Wasmtime defaults are version-keyed; overriding its version never reuses a digest.

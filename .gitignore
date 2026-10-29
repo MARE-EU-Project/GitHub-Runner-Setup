@@ -17,6 +17,7 @@
 !/DATA/etc/ansible/playbooks/remove.yml
 !/DATA/etc/ansible/playbooks/docker-migrate.yml
 !/DATA/etc/ansible/playbooks/labels.yml
+!/DATA/etc/ansible/playbooks/prerequisites.yml
 !/DATA/etc/ansible/roles/**
 # Keep caches and secrets ignored even inside tracked source directories.
 __pycache__/

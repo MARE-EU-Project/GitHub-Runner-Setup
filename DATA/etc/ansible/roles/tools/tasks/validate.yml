@@ -53,6 +53,7 @@
       - item is string and item is match('^[0-9]+[.][0-9]+[.][0-9]+$')
     fail_msg: Tool versions must be explicit numeric major.minor.patch releases.
   loop:
+    - "{{ shellcheck_version }}"
     - "{{ docker_version }}"
     - "{{ docker_compose_version }}"
     - "{{ kubectl_version }}"
@@ -66,7 +67,7 @@
 - name: Validate configured artifact checksums
   ansible.builtin.assert:
     that:
-      - item.key in ['kubectl', 'minikube', 'helm', 'vagrant', 'wasmtime', 'docker-machine-driver-kvm2']
+      - item.key in ['shellcheck', 'kubectl', 'minikube', 'helm', 'vagrant', 'wasmtime', 'docker-machine-driver-kvm2']
       - item.value is string and item.value is match('^[a-fA-F0-9]{64}$')
   loop: "{{ tools_artifact_sha256 | dict2items }}"
   loop_control:
