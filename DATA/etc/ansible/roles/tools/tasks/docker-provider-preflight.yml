@@ -1,0 +1,35 @@
+---
+- name: Inspect installed packages before selecting the Compose provider
+  ansible.builtin.package_facts:
+    manager: apt
+
+- name: Refuse mixing Ubuntu and Docker upstream Compose packages
+  ansible.builtin.assert:
+    that:
+      - tools_compose_other_package not in ansible_facts.packages
+    fail_msg: >-
+      Installed {{ tools_compose_other_package }} conflicts with the Compose
+      package selected by docker_package_source={{ docker_package_source }}.
+      Both providers install the same Docker CLI plugin path, which apt's
+      dependency simulation may not detect. Plan a provider migration to the
+      current stable release before retrying; never downgrade. Alternatively,
+      disable managed Compose with
+      docker_compose_enabled=false to retain the existing plugin unmanaged.
+      This playbook never removes or replaces another provider automatically.
+  vars:
+    tools_compose_other_package: >-
+      {{ 'docker-compose-plugin' if docker_package_source == 'ubuntu'
+      else 'docker-compose-v2' }}
+  when: docker_compose_enabled
+
+- name: Reject automatic migration of an existing Ubuntu Docker engine
+  ansible.builtin.assert:
+    that:
+      - "'docker.io' not in ansible_facts.packages"
+    fail_msg: >-
+      docker.io is installed, but the current stable releases use Docker's
+      official upstream repository. Provider migration replaces the Docker
+      engine and containerd packages and requires a planned, drained maintenance
+      window. Existing containers are left running. This playbook never removes
+      the existing engine automatically.
+  when: docker_package_source == 'upstream'

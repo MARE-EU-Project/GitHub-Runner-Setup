@@ -16,6 +16,6 @@
     HOME: "{{ runner_home_root }}/{{ runner_instance.user }}"
     PATH: "{{ runner_service_path }}"
     ACTIONS_RUNNER_INPUT_UNATTENDED: 'true'
-    ACTIONS_RUNNER_INPUT_TOKEN: "{{ runner_fresh_token.json.token if github_api_token | default('') | length > 0 else runner_removal_token }}"
+    ACTIONS_RUNNER_INPUT_TOKEN: "{{ runner_fresh_token.json.token if runner_effective_api_token | default('') | length > 0 else runner_removal_token }}"
   no_log: true
   changed_when: true

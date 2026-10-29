@@ -61,6 +61,10 @@
     loop_var: tools_runner
     label: "{{ tools_runner.user }}"
 
+- name: Check Docker provider conflicts before package or account changes
+  ansible.builtin.include_tasks: docker-provider-preflight.yml
+  when: docker_enabled
+
 - name: Refresh Ubuntu package metadata without changing repository configuration
   ansible.builtin.apt:
     update_cache: true

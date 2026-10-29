@@ -19,12 +19,12 @@ tools_drain_confirmed: false
 # Opt in separately when packages already match but an old daemon still runs.
 docker_restart_pending: false
 
-docker_version: "29.1.3"
-docker_compose_version: "2.40.3"
-kubectl_version: "1.37.1"
+docker_version: "29.9.2"
+docker_compose_version: "5.6.1"
+kubectl_version: "1.37.2"
 minikube_version: "1.39.0"
-kubernetes_version: "1.37.0"
-helm_version: "4.3.0"
+kubernetes_version: "1.37.2"
+helm_version: "4.3.1"
 vagrant_version: "2.4.9"
 vagrant_package_revision: "1"
 vagrant_libvirt_version: "0.12.2"
@@ -37,20 +37,22 @@ wasmtime_release_sha256:
 
 # Select native or upstream repositories explicitly; never borrow another suite.
 docker_package_sources_by_release:
-  noble: ubuntu
-  resolute: ubuntu
+  noble: upstream
+  resolute: upstream
 docker_package_source: "{{ docker_package_sources_by_release[ansible_facts.distribution_release] }}"
-# Pin the verified native backports separately for each Ubuntu release.
+# Pin verified official stable packages separately for each Ubuntu release.
 # Removing a package entry or setting it to "" explicitly selects the highest
 # published Debian packaging revision of the exact requested upstream release.
-# Upstream package names differ, so these native pins never apply across sources.
+# Package names differ, so these upstream pins never apply to Ubuntu packages.
 docker_apt_version_overrides:
   noble:
-    docker.io: "29.1.3-0ubuntu3~24.04.2"
-    docker-compose-v2: "2.40.3+ds1-0ubuntu1~24.04.1"
+    docker-ce: "5:29.9.2-1~ubuntu.24.04~noble"
+    docker-ce-cli: "5:29.9.2-1~ubuntu.24.04~noble"
+    docker-compose-plugin: "5.6.1-1~ubuntu.24.04~noble"
   resolute:
-    docker.io: "29.1.3-0ubuntu4.1"
-    docker-compose-v2: "2.40.3+ds1-0ubuntu1"
+    docker-ce: "5:29.9.2-1~ubuntu.26.04~resolute"
+    docker-ce-cli: "5:29.9.2-1~ubuntu.26.04~resolute"
+    docker-compose-plugin: "5.6.1-1~ubuntu.26.04~resolute"
 tools_ubuntu_packages:
   noble:
     common: [ca-certificates, gnupg, tar, gzip, xz-utils, unzip, sudo, acl, python3-pip, python3-venv]

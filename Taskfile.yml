@@ -137,6 +137,18 @@ tasks:
       - task: _playbook
         vars: {PLAYBOOK: provision.yml}
 
+  labels:
+    desc: Show (--check) or reconcile custom labels without restarting registered runners
+    cmds:
+      - task: _playbook
+        vars: {PLAYBOOK: labels.yml}
+
+  maintenance:docker:
+    desc: Migrate one Ubuntu Docker host to upstream packages during explicit maintenance
+    cmds:
+      - task: _playbook
+        vars: {PLAYBOOK: docker-migrate.yml}
+
   verify:
     desc: Verify runners selected by LIMIT (functional tests remain opt-in)
     cmds:
@@ -174,5 +186,5 @@ tasks:
     desc: Syntax-check every playbook against the non-secret example inventory
     dir: '{{.ROOT_DIR}}'
     cmds:
-      - for: [provision, verify, remove]
+      - for: [provision, verify, remove, docker-migrate, labels]
         cmd: '{{.VENV | shellQuote}}/bin/ansible-playbook -i DATA/etc/ansible/templates/hosts.yml DATA/etc/ansible/playbooks/{{.ITEM}}.yml --syntax-check'

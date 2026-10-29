@@ -152,6 +152,9 @@
       - runner_installed.stdout | trim is match('^[0-9]+\.[0-9]+\.[0-9]+$')
   when: runner_installed is not skipped
 
+- name: Derive identity, OS and managed capability labels
+  ansible.builtin.include_tasks: labels-calculate.yml
+
 - name: Calculate desired registration manifest
   ansible.builtin.set_fact:
     runner_staging_dir: "{{ runner_instance.install_dir }}.staging"
@@ -160,7 +163,7 @@
       user: "{{ runner_instance.user }}"
       install_dir: "{{ runner_instance.install_dir }}"
       work_dir: "{{ runner_instance.work_dir }}"
-      labels: "{{ runner_instance.labels | sort }}"
+      labels: "{{ runner_labels }}"
       organization: "{{ github_organization }}"
       runner_group: "{{ github_runner_group }}"
       disable_update: "{{ runner_disable_update | bool }}"
@@ -182,4 +185,5 @@
 
 - name: Calculate registration change
   ansible.builtin.set_fact:
-    runner_reconfigure: "{{ runner_paths.results[1].stat.exists and runner_previous != runner_desired }}"
+    runner_reconfigure: "{{ runner_paths.results[1].stat.exists and (runner_previous | combine({'labels': runner_desired.labels})) != runner_desired }}"
+    runner_labels_changed: "{{ runner_paths.results[1].stat.exists and (runner_previous.labels | default([]) | map('lower') | unique | sort) != (runner_desired.labels | sort) }}"

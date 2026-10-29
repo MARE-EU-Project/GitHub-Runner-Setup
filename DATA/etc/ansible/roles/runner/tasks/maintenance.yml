@@ -32,7 +32,7 @@
     url: "{{ runner_api_url }}/orgs/{{ runner_previous.organization }}/actions/runners/{{ runner_identity.agentId }}"
     method: GET
     headers:
-      Authorization: "{{ ['Bearer', github_api_token] | join(' ') }}"
+      Authorization: "{{ ['Bearer', runner_effective_api_token] | join(' ') }}"
       Accept: application/vnd.github+json
       X-GitHub-Api-Version: '2022-11-28'
     return_content: true
@@ -42,7 +42,7 @@
   no_log: true
   when:
     - runner_paths.results[1].stat.exists
-    - github_api_token | default('') | length > 0
+    - runner_effective_api_token | default('') | length > 0
 
 - name: Refuse maintenance of a busy runner
   ansible.builtin.assert:
@@ -54,4 +54,4 @@
 - name: Explain offline maintenance responsibility
   ansible.builtin.debug:
     msg: No API token supplied; maintenance confirmation attests that you independently verified this runner is idle.
-  when: github_api_token | default('') | length == 0
+  when: runner_effective_api_token | default('') | length == 0

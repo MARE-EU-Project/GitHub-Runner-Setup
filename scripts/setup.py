@@ -99,8 +99,8 @@ def configure(args, bin_dir):
         print("Select a host below. Existing values are preserved; use Vim to change them.")
 
     alias = args.limit or ask("Inventory host name", next(iter(existing)) if len(existing) == 1 else "",
-                              r"[A-Za-z_][A-Za-z0-9_]*")
-    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", alias):
+                              r"[A-Za-z_][A-Za-z0-9_.-]*")
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", alias):
         raise ValueError("Setup requires one inventory host name, not a LIMIT pattern.")
     if args.inventory.exists() and alias not in existing:
         raise ValueError("Host not found. Add it with Vim or use a separate INVENTORY_DIR for a new host.")
@@ -129,7 +129,7 @@ def configure(args, bin_dir):
             raise ValueError("Use a dedicated runner account, distinct from the SSH administrator.")
         instances = [{"name": name, "user": account,
                       "install_dir": f"/opt/actions-runner/{name}",
-                      "work_dir": f"/var/lib/actions-runner/{name}", "labels": [name, "mare-smoke"],
+                      "work_dir": f"/var/lib/actions-runner/{name}", "labels": [],
                       "minikube_profile": name}]
         values["runner_instances"] = instances
         for key, label in (("docker_enabled", "Install Docker and Compose?"),
@@ -168,7 +168,7 @@ def configure(args, bin_dir):
            "-p", str(effective.get("ansible_port", 22))]
     if effective.get("ansible_ssh_private_key_file"):
         ssh += ["-i", str(Path(effective["ansible_ssh_private_key_file"]).expanduser())]
-    return alias, ssh + ["-l", user, address, "true"]
+    return alias, ssh + ["-l", user, address, "true"], organization
 
 
 def credentials(args, bin_dir):
@@ -216,6 +216,63 @@ def credentials(args, bin_dir):
     print("Encrypted Vault saved. Existing Vault variables were preserved.")
 
 
+
+def label_credentials(organization, temporary_root):
+    """Obtain runner-write access only when existing labels actually need it."""
+    print("Existing runner labels need organization runner-write API permission.")
+    print("A registration token cannot update an existing runner's labels.")
+    if shutil.which("gh"):
+        cached = subprocess.run(["gh", "auth", "token", "--hostname", "github.com"],
+                                capture_output=True, text=True)
+        if cached.returncode == 0 and cached.stdout.strip():
+            token = cached.stdout.strip()
+            checked = subprocess.run(
+                ["gh", "api", f"orgs/{organization}/actions/runners", "--include"],
+                env={**os.environ, "GH_TOKEN": token}, capture_output=True, text=True)
+            scopes = re.search(r"(?im)^x-oauth-scopes:\s*([^\r\n]*)", checked.stdout)
+            if checked.returncode == 0 and scopes and "admin:org" in {scope.strip() for scope in scopes.group(1).split(",")}:
+                return token
+        print("GitHub CLI browser authorization needs the admin:org OAuth scope.")
+        print("A GitHub App token can instead use only organization self-hosted runner write permission.")
+        if yes("Authorize with GitHub CLI in the browser (no PAT needed)?", True):
+            with tempfile.TemporaryDirectory(dir=temporary_root) as auth_directory:
+                environment = {key: value for key, value in os.environ.items()
+                               if key not in ("GH_TOKEN", "GITHUB_TOKEN", "GH_CONFIG_DIR")}
+                environment["GH_CONFIG_DIR"] = auth_directory
+                run(["gh", "auth", "login", "--hostname", "github.com", "--web",
+                     "--git-protocol", "ssh", "--skip-ssh-key", "--scopes", "admin:org"], env=environment)
+                token = run(["gh", "auth", "token", "--hostname", "github.com"],
+                            env=environment, capture_output=True, text=True).stdout.strip()
+            if not token:
+                raise ValueError("GitHub CLI did not return a credential.")
+            return token
+    print("Provide a GitHub App, OAuth or personal token with organization runner-write permission.")
+    token = getpass.getpass("Runner-management API token (hidden; used only for this setup): ").strip()
+    if not token or any(character.isspace() for character in token):
+        raise ValueError("A nonempty runner-management token without whitespace is required.")
+    return token
+
+
+def provision_and_verify(variables, sudo, organization, temporary_root):
+    """Keep prompts on the terminal and API credentials out of argv and files."""
+    temporary_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=temporary_root) as session:
+        request = Path(session) / "label-auth-required"
+        environment = {**os.environ, "RUNNER_SETUP_AUTH_REQUEST": str(request)}
+        def task_command(task):
+            return ["task", task] + variables + (["--", "--ask-become-pass"] if sudo else [])
+
+        for task in ("provision", "verify"):
+            result = subprocess.run(task_command(task), env=environment)
+            if task == "provision" and request.exists():
+                environment["RUNNER_SETUP_GITHUB_API_TOKEN"] = label_credentials(organization, Path(session))
+                request.unlink()
+                result = subprocess.run(task_command(task), env=environment)
+                if request.exists():
+                    raise ValueError("GitHub label authorization was not accepted; the runner was preserved.")
+            result.check_returncode()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("inventory", "config", "vault", "password-file"):
@@ -226,7 +283,7 @@ def main():
         raise ValueError("Run task setup in an interactive terminal; use task provision for automation.")
     os.umask(0o077)
     bin_dir = Path(sys.executable).parent
-    alias, ssh = configure(args, bin_dir)
+    alias, ssh, organization = configure(args, bin_dir)
     if yes("Check SSH key access and confirm the server host key now?", True):
         run(ssh)
     credentials(args, bin_dir)
@@ -236,8 +293,7 @@ def main():
     if not yes(f"Provision {alias}, then verify it? This installs enabled tools and starts the runner."):
         print("Configuration saved. Continue later with:\n" + shlex.join(["task", "provision"] + variables))
         return
-    for task in ("provision", "verify"):
-        run(["task", task] + variables + (["--", "--ask-become-pass"] if sudo else []))
+    provision_and_verify(variables, sudo, organization, Path("DATA/var/tmp"))
     print("Setup and verification completed. Confirm the runner is Idle in GitHub, then run a private-repository job.")
 
 

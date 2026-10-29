@@ -1,0 +1,269 @@
+---
+- name: Explicitly migrate Ubuntu Docker to the official stable packages
+  hosts: github_runners
+  gather_facts: true
+  become: true
+  serial: 1
+  any_errors_fatal: true
+  vars:
+    docker_migration_confirmed: false
+    docker_migration_project_paths: []
+  tasks:
+    - name: Require explicit single-host maintenance approval
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | length == 1
+          - docker_migration_confirmed | bool
+          - tool_allow_upgrades | default(false) | bool
+          - maintenance_confirmed | default(false) | bool
+          - tools_drain_confirmed | default(false) | bool
+          - not ansible_check_mode
+        fail_msg: This disruptive migration requires one host, confirmed maintenance and drained workloads.
+
+    - name: Read installed packages
+      ansible.builtin.package_facts:
+        manager: apt
+
+    - name: Require the supported original package provider
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.distribution == 'Ubuntu'
+          - ansible_facts.distribution_release in ['noble', 'resolute']
+          - "'docker.io' in ansible_facts.packages"
+          - "'containerd' in ansible_facts.packages"
+          - "'runc' in ansible_facts.packages"
+          - docker_package_source == 'upstream'
+
+    - name: Refuse migration while a runner job is active
+      ansible.builtin.command:
+        argv: [pgrep, -x, Runner.Worker]
+      register: migration_worker
+      changed_when: false
+      failed_when: migration_worker.rc not in [0, 1]
+
+    - name: Require idle runner jobs
+      ansible.builtin.assert:
+        that: [migration_worker.rc == 1]
+
+    - name: Read the original engine version across package providers
+      ansible.builtin.command:
+        argv: [docker, --host=unix:///var/run/docker.sock, version, --format, '{{ "{{.Server.Version}}" }}']
+      register: migration_original_engine
+      changed_when: false
+
+    - name: Never downgrade the engine when changing providers
+      ansible.builtin.assert:
+        that:
+          - migration_original_engine.stdout | trim is version(docker_version, '<=', version_type='semver')
+
+    - name: Read the original Compose version across package providers
+      ansible.builtin.command:
+        argv: [docker, compose, version, --short]
+      register: migration_original_compose
+      changed_when: false
+      failed_when: migration_original_compose.rc not in [0, 1]
+
+    - name: Never downgrade an existing Compose plugin when changing providers
+      ansible.builtin.assert:
+        that:
+          - >-
+            (migration_original_compose.stdout | regex_search('[0-9]+[.][0-9]+[.][0-9]+'))
+            is version(docker_compose_version, '<=', version_type='semver')
+      when: migration_original_compose.rc == 0
+
+    - name: Identify Docker's storage layout
+      ansible.builtin.command:
+        argv: [docker, --host=unix:///var/run/docker.sock, info, --format, '{{ "{{.DockerRootDir}} {{.Driver}}" }}']
+      register: migration_storage
+      changed_when: false
+
+    - name: Limit this migration to the reviewed storage layout
+      ansible.builtin.assert:
+        that: [migration_storage.stdout == '/var/lib/docker overlay2']
+        fail_msg: Custom Docker storage needs a separately reviewed backup and migration plan.
+
+    - name: Capture only previously running container identities
+      ansible.builtin.command:
+        argv: [docker, --host=unix:///var/run/docker.sock, ps, --quiet, --no-trunc]
+      register: migration_running
+      changed_when: false
+
+    - name: Refuse to replace an existing service-start policy
+      ansible.builtin.stat:
+        path: /usr/sbin/policy-rc.d
+      register: migration_policy
+
+    - name: Require no existing service-start policy
+      ansible.builtin.assert:
+        that: [not migration_policy.stat.exists]
+
+    - name: Choose a unique root-only recovery directory
+      ansible.builtin.set_fact:
+        migration_backup: '/var/backups/mare-runner/docker-upstream-{{ ansible_facts.date_time.iso8601_basic_short }}'
+
+    - name: Create private recovery and download directories
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      loop:
+        - '{{ migration_backup }}'
+        - '{{ migration_backup }}/packages'
+        - /var/cache/runner-tools
+
+    - name: Save installed packages and running container identities
+      ansible.builtin.copy:
+        content: '{{ {"packages": ansible_facts.packages, "running_containers": migration_running.stdout_lines} | to_nice_json }}'
+        dest: '{{ migration_backup }}/original-state.json'
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Save private container configuration
+      ansible.builtin.shell:
+        cmd: 'docker inspect $(docker ps -aq) > {{ migration_backup | quote }}/containers.json'
+      changed_when: true
+      no_log: true
+
+    - name: Inspect optional Docker configuration directories
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop: [/etc/docker, /etc/containerd, /etc/apt/sources.list.d, /etc/apt/keyrings]
+      register: migration_config_paths
+
+    - name: Save original Docker configuration and optional project files
+      ansible.builtin.command:
+        argv: >-
+          {{ ["tar", "--acls", "--xattrs", "-cpf", migration_backup + "/configuration.tar", "--"] +
+          (migration_config_paths.results | selectattr('stat.exists') | map(attribute='item') | list) +
+          docker_migration_project_paths }}
+      no_log: true
+
+    - name: Download the exact original engine packages for emergency recovery
+      ansible.builtin.command:
+        argv: [apt-get, -o, 'APT::Sandbox::User=root', download, '{{ item }}={{ ansible_facts.packages[item][0].version }}']
+        chdir: '{{ migration_backup }}/packages'
+      loop: [docker.io, containerd, runc]
+      changed_when: true
+
+    - name: Save operator recovery instructions before changing packages
+      ansible.builtin.copy:
+        dest: '{{ migration_backup }}/RECOVERY.txt'
+        mode: '0600'
+        content: |
+          Keep this directory private: it contains container credentials and data.
+          Configuration: configuration.tar; container definitions: containers.json.
+          Original packages: packages/; original identities: original-state.json.
+          Cold data snapshot: docker-data.tar (created before package replacement).
+          Do not automatically downgrade or restore data over a running daemon.
+          If migration fails, inspect apt/dpkg state first. Before any emergency
+          original-engine recovery, stop Docker/socket/containerd, move failed
+          /var/lib/docker and /var/lib/containerd aside, preserve them, then restore
+          the cold archive at / and configuration.tar only after review. Original
+          signed engine packages are available locally; dependency/provider removal
+          must be simulated and approved before restoration. No volume is purged.
+
+    - name: Configure the verified official repository using the shared role
+      ansible.builtin.include_role:
+        name: tools
+        tasks_from: docker-repository.yml
+
+    - name: Resolve exact official stable packages using the shared role
+      ansible.builtin.include_role:
+        name: tools
+        tasks_from: docker-resolve.yml
+
+    - name: Simulate the complete provider migration
+      ansible.builtin.command:
+        argv: '{{ ["apt-get", "-s", "--no-install-recommends", "install"] + tools_docker_exact_packages + ["docker.io-", "containerd-", "runc-"] }}'
+      environment: {LC_ALL: C}
+      register: migration_plan
+      changed_when: false
+
+    - name: Allow removal only of the three replaced engine packages
+      ansible.builtin.assert:
+        that:
+          - >-
+            migration_plan.stdout | regex_findall('(?m)^Remv\s+(\S+)') |
+            difference(['docker.io', 'containerd', 'runc']) | length == 0
+          - "'DOWNGRADED' not in migration_plan.stdout"
+
+    - name: Download all replacement packages before interrupting workloads
+      ansible.builtin.command:
+        argv: '{{ ["apt-get", "--download-only", "--yes", "--no-install-recommends", "install"] + tools_docker_exact_packages + ["docker.io-", "containerd-", "runc-"] }}'
+      environment: {DEBIAN_FRONTEND: noninteractive}
+      changed_when: true
+
+    - name: Migrate only after the plan and recovery downloads succeed
+      block:
+        - name: Stop only the containers that were running
+          ansible.builtin.command:
+            argv: '{{ ["docker", "--host=unix:///var/run/docker.sock", "stop", "--time", "120"] + migration_running.stdout_lines }}'
+          when: migration_running.stdout_lines | length > 0
+          changed_when: true
+
+        - name: Stop Docker and its activation socket before the cold snapshot
+          ansible.builtin.systemd_service:
+            name: '{{ item }}'
+            state: stopped
+          loop: [docker.service, docker.socket, containerd.service]
+
+        - name: Create a complete cold snapshot without deleting any source data
+          ansible.builtin.command:
+            argv: [tar, --acls, --xattrs, --sparse, -cpf, '{{ migration_backup }}/docker-data.tar', --, /var/lib/docker, /var/lib/containerd]
+          no_log: true
+
+        - name: Prevent package scripts from starting services during replacement
+          ansible.builtin.copy:
+            content: |
+              #!/bin/sh
+              exit 101
+            dest: /usr/sbin/policy-rc.d
+            owner: root
+            group: root
+            mode: '0755'
+
+        - name: Install the simulated migration without purging configuration or volumes
+          ansible.builtin.command:
+            argv: '{{ ["apt-get", "--yes", "--no-install-recommends", "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold", "install"] + tools_docker_exact_packages + ["docker.io-", "containerd-", "runc-"] }}'
+          environment: {DEBIAN_FRONTEND: noninteractive}
+          changed_when: true
+      always:
+        - name: Remove only the temporary service-start policy created here
+          ansible.builtin.file:
+            path: /usr/sbin/policy-rc.d
+            state: absent
+
+        - name: Reload units and restart the container services
+          ansible.builtin.systemd_service:
+            name: '{{ item }}'
+            daemon_reload: true
+            enabled: true
+            state: started
+          loop: [containerd.service, docker.service]
+
+        - name: Resume only the previously running containers
+          ansible.builtin.command:
+            argv: '{{ ["docker", "--host=unix:///var/run/docker.sock", "start"] + migration_running.stdout_lines }}'
+          when: migration_running.stdout_lines | length > 0
+          changed_when: true
+
+    - name: Verify the actual Docker daemon version
+      ansible.builtin.command:
+        argv: [docker, --host=unix:///var/run/docker.sock, version, --format, '{{ "{{.Server.Version}}" }}']
+      register: migration_server
+      changed_when: false
+      failed_when: migration_server.stdout | trim != docker_version
+
+    - name: Verify the actual Compose plugin version
+      ansible.builtin.command:
+        argv: [docker, compose, version, --short]
+      register: migration_compose
+      changed_when: false
+      failed_when: migration_compose.stdout | trim | regex_replace('^v', '') != docker_compose_version
+
+    - name: Report the private recovery directory
+      ansible.builtin.debug:
+        msg: 'Migration completed. Preserve recovery directory {{ migration_backup }} until workload acceptance succeeds.'

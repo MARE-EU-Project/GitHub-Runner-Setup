@@ -40,7 +40,6 @@
       - item.user is defined
       - item.install_dir is defined
       - item.work_dir is defined
-      - item.labels is defined
       - item.name is string and item.name is match('^[a-z][a-z0-9-]{0,40}$')
       - item.user is string and item.user is match('^[a-z_][a-z0-9_-]{0,30}$')
       - item.user not in ['root', 'ubuntu', 'runner', 'nobody']
@@ -54,10 +53,9 @@
       - not item.install_dir.startswith(item.work_dir + '/')
       - item.install_dir != '/home/' + item.user
       - item.work_dir != '/home/' + item.user
-      - item.labels is sequence and item.labels is not string and item.labels is not mapping
-      - item.labels | length > 0
-      - item.labels | select('string') | list | length == item.labels | length
-      - item.labels | select('match', '^[A-Za-z0-9][A-Za-z0-9_.-]*$') | list | length == item.labels | length
+      - (item.labels | default([])) is sequence and (item.labels | default([])) is not string and (item.labels | default([])) is not mapping
+      - item.labels | default([]) | select('string') | list | length == item.labels | default([]) | length
+      - item.labels | default([]) | select('match', '^[A-Za-z0-9][A-Za-z0-9_.-]*$') | list | length == item.labels | default([]) | length
       - item.minikube_profile | default('minikube') is match('^[a-z][a-z0-9-]{0,62}$')
   loop: "{{ runner_instances }}"
   loop_control:

@@ -14,7 +14,7 @@
     - name: Validate removal token availability before stopping
       ansible.builtin.assert:
         that:
-          - github_api_token | default('') | length > 0 or runner_removal_token | default('') | length > 0
+          - runner_effective_api_token | default('') | length > 0 or runner_removal_token | default('') | length > 0
       no_log: true
       when: runner_paths.results[1].stat.exists
 

@@ -3,7 +3,7 @@
   ansible.builtin.assert:
     that:
       - >-
-        github_api_token | default('') | length > 0 or
+        runner_effective_api_token | default('') | length > 0 or
         (runner_registration_token | default('') | length > 0 if runner_token_action == 'registration'
         else runner_removal_token | default('') | length > 0)
     fail_msg: Supply an API token or the appropriate short-lived registration/removal token through Vault.
@@ -14,7 +14,7 @@
     url: "{{ runner_api_url }}/orgs/{{ runner_token_organization }}/actions/runners/{{ runner_token_action }}-token"
     method: POST
     headers:
-      Authorization: "{{ ['Bearer', github_api_token] | join(' ') }}"
+      Authorization: "{{ ['Bearer', runner_effective_api_token] | join(' ') }}"
       Accept: application/vnd.github+json
       X-GitHub-Api-Version: '2022-11-28'
     status_code: 201
@@ -22,11 +22,11 @@
     unredirected_headers: [Authorization]
   register: runner_fresh_token
   no_log: true
-  when: github_api_token | default('') | length > 0
+  when: runner_effective_api_token | default('') | length > 0
 
 - name: Validate minted token response
   ansible.builtin.assert:
     that:
       - runner_fresh_token.json.token | default('') | length > 0
   no_log: true
-  when: github_api_token | default('') | length > 0
+  when: runner_effective_api_token | default('') | length > 0

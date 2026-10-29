@@ -1,0 +1,30 @@
+---
+- name: Inspect the existing managed runner without changing it
+  ansible.builtin.include_tasks: inspect.yml
+
+- name: Require an existing registration with matching non-label settings
+  ansible.builtin.assert:
+    that:
+      - runner_marker.stat.exists
+      - runner_paths.results[1].stat.exists
+      - not runner_reconfigure | bool
+    fail_msg: Label management requires an existing managed registration with matching identity and group settings.
+
+- name: Display the calculated labels for review
+  ansible.builtin.debug:
+    msg: '{{ runner_instance.name }} custom labels: {{ runner_labels | join(", ") }}'
+
+- name: Apply label-only changes without service interruption
+  when: runner_labels_changed | bool and not ansible_check_mode
+  block:
+    - name: Update GitHub labels through the API
+      ansible.builtin.include_tasks: labels-sync.yml
+
+    - name: Record only the successfully applied label change
+      become: true
+      ansible.builtin.copy:
+        content: "{{ runner_desired | to_nice_json }}\n"
+        dest: '{{ runner_state_dir }}/{{ runner_instance.name }}.json'
+        owner: root
+        group: root
+        mode: '0600'

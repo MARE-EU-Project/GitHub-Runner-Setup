@@ -1,0 +1,76 @@
+---
+- name: Require label management authorization
+  ansible.builtin.import_tasks: labels-auth.yml
+
+- name: Synchronize the exact registered identity through the GitHub API
+  when: runner_effective_api_token | default('') | length > 0
+  no_log: true
+  block:
+    - name: Read only this runner's registration identity
+      become: true
+      ansible.builtin.slurp:
+        src: '{{ runner_instance.install_dir }}/.runner'
+      register: runner_label_identity
+
+    - name: Decode the registered identity including optional UTF-8 BOM
+      ansible.builtin.set_fact:
+        runner_label_identity_data: "{{ runner_label_identity.content | b64decode(encoding='utf-8-sig') | from_json }}"
+
+    - name: Validate the registered identity before selecting an API resource
+      ansible.builtin.assert:
+        that:
+          - runner_label_identity_data.agentId | string is match('^[1-9][0-9]*$')
+          - runner_label_identity_data.agentName == runner_instance.name
+
+    - name: Read the exact organization runner and its labels
+      ansible.builtin.uri:
+        url: '{{ runner_api_url }}/orgs/{{ github_organization }}/actions/runners/{{ runner_label_identity_data.agentId }}'
+        headers:
+          Authorization: "{{ ['Bearer', runner_effective_api_token] | join(' ') }}"
+          Accept: application/vnd.github+json
+        unredirected_headers: [Authorization]
+        status_code: [200, 401, 403]
+        return_content: true
+      register: runner_label_current
+
+    - name: Request renewed authorization if the credential cannot read the runner
+      ansible.builtin.include_tasks: labels-auth.yml
+      vars:
+        runner_label_auth_denied: true
+      when: runner_label_current.status != 200
+
+    - name: Require the expected GitHub runner name
+      ansible.builtin.assert:
+        that: [runner_label_current.json.name == runner_instance.name]
+
+    - name: Replace custom labels only when their actual set differs
+      ansible.builtin.uri:
+        url: '{{ runner_api_url }}/orgs/{{ github_organization }}/actions/runners/{{ runner_label_identity_data.agentId }}/labels'
+        method: PUT
+        headers:
+          Authorization: "{{ ['Bearer', runner_effective_api_token] | join(' ') }}"
+          Accept: application/vnd.github+json
+        body_format: json
+        body: {labels: '{{ runner_labels }}'}
+        unredirected_headers: [Authorization]
+        status_code: [200, 401, 403]
+        return_content: true
+      register: runner_label_updated
+      changed_when: runner_label_updated.status == 200
+      when: >-
+        (runner_label_current.json.labels | selectattr('type', 'equalto', 'custom') |
+        map(attribute='name') | map('lower') | unique | sort) != (runner_labels | sort)
+
+    - name: Request renewed authorization if the credential cannot write labels
+      ansible.builtin.include_tasks: labels-auth.yml
+      vars:
+        runner_label_auth_denied: true
+      when: runner_label_updated is not skipped and runner_label_updated.status != 200
+
+    - name: Verify the resulting custom label set before recording it locally
+      ansible.builtin.assert:
+        that:
+          - >-
+            (runner_label_updated.json.labels | selectattr('type', 'equalto', 'custom') |
+            map(attribute='name') | map('lower') | unique | sort) == (runner_labels | sort)
+      when: runner_label_updated is not skipped

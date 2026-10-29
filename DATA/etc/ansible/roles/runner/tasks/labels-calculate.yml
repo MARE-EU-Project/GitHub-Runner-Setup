@@ -1,0 +1,23 @@
+---
+- name: Calculate canonical custom labels from successfully provisioned capabilities
+  vars:
+    runner_identity_labels: "{{ [runner_instance.name | lower, 'ubuntu-' ~ ansible_facts.distribution_version] }}"
+  ansible.builtin.set_fact:
+    runner_labels: >-
+      {{ runner_identity_labels + ((
+      (['docker'] if docker_enabled | bool else []) +
+      (['docker-compose'] if docker_enabled | bool and docker_compose_enabled | default(docker_enabled) | bool else []) +
+      (['kubectl'] if kubectl_enabled | default(kubernetes_enabled) | bool else []) +
+      (['minikube'] if minikube_enabled | default(kubernetes_enabled) | bool else []) +
+      (['helm'] if helm_enabled | default(kubernetes_enabled) | bool else []) +
+      (['kubernetes'] if minikube_initialize | default(false) | bool and
+      minikube_enabled | default(kubernetes_enabled) | bool and
+      kubectl_enabled | default(kubernetes_enabled) | bool else []) +
+      (['libvirt', 'kvm'] if virtualization_enabled | bool else []) +
+      (['vagrant'] if vagrant_enabled | default(virtualization_enabled) | bool else []) +
+      (['wasm', 'wasmtime'] if wasmtime_enabled | bool else []) +
+      (runner_instance.labels | default([]) | map('lower') |
+      reject('in', ['self-hosted', 'linux', 'x64', 'mare-smoke', 'docker', 'docker-compose',
+      'kubectl', 'minikube', 'helm', 'kubernetes', 'libvirt', 'kvm', 'vagrant', 'wasm', 'wasmtime']) |
+      reject('match', '^ubuntu-[0-9]+[.][0-9]+$') | list)) |
+      unique | reject('in', runner_identity_labels) | sort) }}

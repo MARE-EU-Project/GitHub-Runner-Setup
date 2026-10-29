@@ -2,6 +2,10 @@
 - name: Inspect instance before making changes
   ansible.builtin.include_tasks: inspect.yml
 
+- name: Require label API authorization before changing this runner
+  ansible.builtin.include_tasks: labels-auth.yml
+  when: runner_labels_changed | bool and not runner_reconfigure | bool and not ansible_check_mode
+
 - name: Detect service configuration changes without writing
   become: true
   ansible.builtin.template:
@@ -64,8 +68,8 @@
     - name: Verify token availability before stopping or reconfiguring
       ansible.builtin.assert:
         that:
-          - github_api_token | default('') | length > 0 or runner_registration_token | default('') | length > 0
-          - not runner_reconfigure | bool or github_api_token | default('') | length > 0 or runner_removal_token | default('') | length > 0
+          - runner_effective_api_token | default('') | length > 0 or runner_registration_token | default('') | length > 0
+          - not runner_reconfigure | bool or runner_effective_api_token | default('') | length > 0 or runner_removal_token | default('') | length > 0
       no_log: true
       when: not runner_paths.results[1].stat.exists or runner_reconfigure | bool
 
@@ -262,6 +266,10 @@
       ansible.builtin.include_tasks: unregister.yml
       when: runner_reconfigure | bool
 
+    - name: Synchronize labels without re-registering or stopping the runner
+      ansible.builtin.include_tasks: labels-sync.yml
+      when: runner_labels_changed | bool and not runner_reconfigure | bool
+
     - name: Update root-controlled nonsecret ownership manifest
       become: true
       ansible.builtin.copy:
@@ -288,14 +296,14 @@
           --name {{ runner_instance.name | quote }}
           --runnergroup {{ github_runner_group | quote }}
           --work {{ runner_instance.work_dir | quote }}
-          --labels {{ (runner_instance.labels | join(',')) | quote }}
+          --labels {{ (runner_labels | join(',')) | quote }}
           {{ '--disableupdate' if runner_disable_update | bool else '' }}
         chdir: "{{ runner_instance.install_dir }}"
         executable: /bin/bash
       environment:
         HOME: "{{ runner_home_root }}/{{ runner_instance.user }}"
         PATH: "{{ runner_effective_service_path }}"
-        ACTIONS_RUNNER_INPUT_TOKEN: "{{ runner_fresh_token.json.token if github_api_token | default('') | length > 0 else runner_registration_token }}"
+        ACTIONS_RUNNER_INPUT_TOKEN: "{{ runner_fresh_token.json.token if runner_effective_api_token | default('') | length > 0 else runner_registration_token }}"
       no_log: true
       changed_when: true
       when: not runner_paths.results[1].stat.exists or runner_reconfigure | bool

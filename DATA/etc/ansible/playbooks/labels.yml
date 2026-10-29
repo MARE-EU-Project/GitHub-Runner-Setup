@@ -1,0 +1,14 @@
+---
+- name: Manage labels without reinstalling or restarting runners
+  hosts: github_runners
+  gather_facts: true
+  tasks:
+    - name: Load tool defaults without provisioning
+      ansible.builtin.import_role:
+        name: tools
+        tasks_from: noop
+
+    - name: Calculate and reconcile labels on existing runners
+      ansible.builtin.import_role:
+        name: runner
+        tasks_from: labels

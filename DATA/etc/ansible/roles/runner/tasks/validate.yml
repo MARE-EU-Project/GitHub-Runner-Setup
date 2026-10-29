@@ -38,10 +38,11 @@
       - item.work_dir is match('^/(home|opt|srv|var/lib|mnt|data)/[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*$')
       - not item.install_dir.startswith(item.work_dir ~ '/')
       - item.work_dir != runner_home_root ~ '/' ~ item.user
-      - item.labels is sequence
-      - item.labels is not string
-      - item.labels | length > 0
-      - item.labels | select('match', '^[A-Za-z0-9][A-Za-z0-9_.-]*$') | list | length == item.labels | length
+      - (item.labels | default([])) is sequence
+      - (item.labels | default([])) is not string
+      - (item.labels | default([])) is not mapping
+      - item.labels | default([]) | select('string') | list | length == item.labels | default([]) | length
+      - item.labels | default([]) | select('match', '^[A-Za-z0-9][A-Za-z0-9_.-]*$') | list | length == item.labels | default([]) | length
       - item.minikube_profile | default('minikube') is match('^[a-z][a-z0-9-]{0,62}$')
     fail_msg: Each runner needs a unique dedicated account, safe absolute install/work directories under approved roots, and labels.
   loop: "{{ runner_instances }}"

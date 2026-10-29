@@ -9,6 +9,7 @@
       - runner_paths.results[1].stat.exists
       - runner_paths.results[2].stat.exists
       - not runner_reconfigure | bool
+      - not runner_labels_changed | bool
       - runner_installed.stdout | trim is version(runner_version, '>=')
       - runner_paths.results[0].stat.mode == '0700'
     fail_msg: Runner is missing, incorrectly configured, outdated, or not privately installed.
@@ -207,13 +208,13 @@
     src: "{{ runner_instance.install_dir }}/.runner"
   register: runner_verify_identity
   no_log: true
-  when: github_api_token | default('') | length > 0
+  when: runner_effective_api_token | default('') | length > 0
 
 - name: Decode runner identity with an optional UTF-8 byte-order mark
   ansible.builtin.set_fact:
     runner_verify_identity_data: "{{ runner_verify_identity.content | b64decode(encoding='utf-8-sig') | from_json }}"
   no_log: true
-  when: github_api_token | default('') | length > 0
+  when: runner_effective_api_token | default('') | length > 0
 
 - name: Validate local runner API identity
   ansible.builtin.assert:
@@ -221,13 +222,13 @@
       - runner_verify_identity_data.agentId | string is match('^[1-9][0-9]*$')
       - runner_verify_identity_data.agentName == runner_instance.name
   no_log: true
-  when: github_api_token | default('') | length > 0
+  when: runner_effective_api_token | default('') | length > 0
 
 - name: Optionally verify this exact registration through GitHub API
   ansible.builtin.uri:
     url: "{{ runner_api_url }}/orgs/{{ github_organization }}/actions/runners/{{ runner_verify_identity_data.agentId }}"
     headers:
-      Authorization: "{{ ['Bearer', github_api_token] | join(' ') }}"
+      Authorization: "{{ ['Bearer', runner_effective_api_token] | join(' ') }}"
       Accept: application/vnd.github+json
       X-GitHub-Api-Version: '2022-11-28'
     status_code: 200
@@ -235,13 +236,13 @@
     unredirected_headers: [Authorization]
   register: runner_verify_api
   no_log: true
-  when: github_api_token | default('') | length > 0
+  when: runner_effective_api_token | default('') | length > 0
 
 - name: Assert GitHub sees the intended online runner and labels
   ansible.builtin.assert:
     that:
       - runner_verify_api.json.name == runner_instance.name
       - runner_verify_api.json.status == 'online'
-      - runner_instance.labels | difference(runner_verify_api.json.labels | map(attribute='name') | list) | length == 0
+      - runner_labels | difference(runner_verify_api.json.labels | map(attribute='name') | map('lower') | list) | length == 0
     fail_msg: GitHub registration is offline, has the wrong identity, or lacks requested labels.
-  when: github_api_token | default('') | length > 0
+  when: runner_effective_api_token | default('') | length > 0

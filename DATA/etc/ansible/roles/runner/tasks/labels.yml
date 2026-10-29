@@ -1,0 +1,10 @@
+---
+- name: Validate label management settings
+  ansible.builtin.import_tasks: validate.yml
+
+- name: Update labels independently of tools and runner service changes
+  ansible.builtin.include_tasks: labels-instance.yml
+  loop: '{{ runner_instances }}'
+  loop_control:
+    loop_var: runner_instance
+    label: '{{ runner_instance.name }}'

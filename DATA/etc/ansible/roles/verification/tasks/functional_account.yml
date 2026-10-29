@@ -459,7 +459,40 @@
       environment:
         VAGRANT_HOME: "{{ functional_workspace.path }}/vagrant-home"
         VAGRANT_DEFAULT_PROVIDER: libvirt
+      register: functional_vagrant_boot
+      failed_when: false
       when: functional_vagrant_runtime_enabled | bool
+
+    - name: Reserve a root-only failure diagnostic file
+      become_user: root
+      ansible.builtin.tempfile:
+        state: file
+        path: /var/tmp
+        prefix: mare-runner-vagrant-
+        suffix: .json
+      register: functional_vagrant_diagnostic
+      when:
+        - functional_vagrant_runtime_enabled | bool
+        - functional_vagrant_boot.rc != 0
+
+    - name: Save private boot diagnostics before cleaning up the disposable VM
+      become_user: root
+      ansible.builtin.copy:
+        dest: "{{ functional_vagrant_diagnostic.path }}"
+        content: "{{ {'rc': functional_vagrant_boot.rc, 'stdout': functional_vagrant_boot.stdout, 'stderr': functional_vagrant_boot.stderr} | to_nice_json }}"
+        owner: root
+        group: root
+        mode: "0600"
+      when:
+        - functional_vagrant_runtime_enabled | bool
+        - functional_vagrant_boot.rc != 0
+
+    - name: Require a successful Vagrant boot without exposing private output
+      ansible.builtin.assert:
+        that: [functional_vagrant_boot.rc == 0]
+        fail_msg: "Vagrant boot failed; root-only diagnostics: {{ functional_vagrant_diagnostic.path | default('unavailable') }}"
+      when: functional_vagrant_runtime_enabled | bool
+      no_log: false
 
     - name: Verify the isolated VM can execute a command
       ansible.builtin.command:

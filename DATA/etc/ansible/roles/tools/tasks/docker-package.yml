@@ -66,6 +66,30 @@
   failed_when: tools_docker_installed_package.rc not in [0, 1]
   check_mode: false
 
+- name: Compare the selected Docker package against the installed Debian version
+  ansible.builtin.command:
+    argv:
+      - dpkg
+      - --compare-versions
+      - "{{ tools_docker_selected_apt_version }}"
+      - ge
+      - "{{ tools_docker_installed_package.stdout.split('|', 1)[1] }}"
+  register: tools_docker_not_downgrade
+  changed_when: false
+  failed_when: tools_docker_not_downgrade.rc not in [0, 1]
+  check_mode: false
+  when: tools_docker_installed_package.stdout.startswith('install ok installed|')
+
+- name: Reject Docker package downgrades even during approved maintenance
+  ansible.builtin.assert:
+    that:
+      - tools_docker_not_downgrade.rc == 0
+    fail_msg: >-
+      Requested {{ tools_docker_package.name }}={{ tools_docker_selected_apt_version }}
+      is older than the installed release. Downgrades are never allowed;
+      update the configured stable release pin before retrying.
+  when: tools_docker_installed_package.stdout.startswith('install ok installed|')
+
 - name: Require opt-in before changing an installed Docker package release
   ansible.builtin.assert:
     that:

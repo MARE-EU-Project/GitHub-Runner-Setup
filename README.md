@@ -275,7 +275,6 @@ supports Ansible's scoped escalation; runner accounts are not sudoers.
 | `DATA/etc/ansible/playbooks/provision.yml` | Install tools and runners, optionally initialize Minikube |
 | `DATA/etc/ansible/playbooks/verify.yml` | Verify, optionally run isolated functional tests |
 | `DATA/etc/ansible/playbooks/remove.yml` | Explicitly deregister selected instances |
-| `.github/workflows/runner-smoke.yml` | Smoke workflow with a required `runner_group` dispatch input |
 | `Taskfile.yml` | Local setup, inventory/Vault helpers, targeted playbooks and validation |
 | `scripts/setup.py` | Interactive local configuration and orchestration of existing tasks |
 
@@ -306,79 +305,58 @@ All versions are variables. The complete non-secret example configuration is
 `DATA/etc/ansible/templates/group_vars/all.yml`; instance fields are illustrated in
 `host_vars`. Role defaults document additional overrides.
 
-| Component | Initial version | Source/integrity |
+The pins below match official stable releases checked on 2026-10-28. Keep exact
+versions and checksums for reproducibility, and refresh them from upstream stable
+release metadata before provisioning. Never substitute an older distribution
+package when the requested stable release is unavailable. Existing installations
+still require approved maintenance for upgrades; downgrades are forbidden.
+
+| Component | Stable version | Source/integrity |
 |---|---|---|
-| Actions runner | `2.338.0` | Official `actions/runner` release; asset SHA256 or supplied reviewed SHA256 |
-| Docker Engine | `29.1.3` | Ubuntu apt if exact version available; otherwise signed Docker apt repository |
-| Compose v2 plugin | `2.40.3` | Same explicit apt-source choice; independently resolved exact plugin version |
-| kubectl | `1.37.1` | `dl.k8s.io`, official versioned SHA256 |
-| Minikube | `1.39.0` | Official `kubernetes/minikube` release and SHA256 |
-| Kubernetes in Minikube | `1.37.0` | Explicit Minikube start version; only downloaded on optional initialization |
-| Helm | `4.3.0` | `get.helm.sh`, versioned archive and checksum |
-| Vagrant | `2.4.9` | HashiCorp versioned release/checksum |
-| vagrant-libvirt | `0.12.2` | Exact RubyGems plugin version, installed separately per runner |
-| QEMU/KVM, libvirt | Ubuntu-managed | Supported release's configured Ubuntu repositories |
-| Wasmtime | `50.0.0` | Bytecode Alliance x86-64 GNU/Linux release with published asset SHA256 |
+| Actions runner | `2.338.2` | Official release; pinned Linux x64 asset SHA256 |
+| Docker Engine | `29.9.2` | Signed official Docker stable apt repository |
+| Docker Compose plugin | `5.6.1` | Same signed repository, exact package pin |
+| kubectl | `1.37.2` | Official versioned SHA256 |
+| Minikube | `1.39.0` | Official release and SHA256 |
+| Kubernetes in Minikube | `1.37.2` | Explicit version for new clusters; existing clusters are preserved |
+| Helm | `4.3.1` | Official versioned archive and checksum |
+| Vagrant | `2.4.9` | HashiCorp release/checksum |
+| vagrant-libvirt | `0.12.2` | Exact RubyGems release and checksum |
+| QEMU/KVM, libvirt | Ubuntu-managed | Configured release's signed Ubuntu repositories |
+| Wasmtime | `50.0.0` | Official release with published asset SHA256 |
 
-`docker_package_source` explicitly selects `upstream` or `ubuntu`.
-The default is **ubuntu on both releases**, using each suite's own security and
-backport packages, not identical Debian revision strings.
-There is **no automatic source fallback**. Noble and resolute have separate
-package maps and use their own repository suites:
+`docker_package_source` defaults to `upstream` on Ubuntu 24.04 and 26.04.
+Each uses its own suite; Noble packages are never installed on Resolute.
+The exact package revisions are pinned separately in
+`docker_apt_version_overrides`. Docker's official repository publishes Engine
+29.9.2 and Compose 5.6.1 for both supported suites. See the
+[official installation instructions](https://docs.docker.com/engine/install/ubuntu/),
+[Engine release](https://github.com/moby/moby/releases/tag/docker-v29.9.2), and
+[Compose release](https://github.com/docker/compose/releases/tag/v5.6.1).
 
-| Release | Ubuntu choice | Upstream choice |
-|---|---|---|
-| 24.04 noble | Engine `29.1.3-0ubuntu3~24.04.2`, Compose `2.40.3+ds1-0ubuntu1~24.04.1` | `download.docker.com/linux/ubuntu`, suite noble |
-| 26.04 resolute | Engine `29.1.3-0ubuntu4.1`, Compose `2.40.3+ds1-0ubuntu1` | Same official server, **suite resolute**, baseline absent |
+The optional `ubuntu` provider requires explicit versions available in that
+suite's native universe/security indexes. It is never an automatic fallback.
+The role compares Debian package versions with `dpkg --compare-versions` and
+rejects downgrades even when maintenance flags are enabled. Package installation
+also disables downgrades and automatic removals.
 
-On each target, apt metadata is checked for the exact engine, CLI and Compose
-versions and dependency resolution is simulated before installation.
-Ubuntu's package versions need not equal Docker's upstream release numbers.
-The example's `docker_apt_version_overrides` pins the known full package
-revisions separately for each release. Role defaults without these overrides
-select the highest available packaging revision of the configured upstream
-version. Review and update full revision pins when adopting Ubuntu security
-updates; missing pinned revisions fail rather than being replaced.
-The source map intentionally does not reuse noble packages on resolute.
-Verify both suites independently; an unavailable resolute repository is not
-permission to install noble packages. The selected Docker key fingerprint is
-pinned in role defaults.
+A host with `docker.io` cannot silently switch to the official Docker engine:
+that migration replaces engine/containerd packages and needs a drained
+maintenance window. The early preflight preserves running containers and stops
+with an actionable message. Compose packages from different providers also
+conflict at the same CLI plugin path; apt's simulation may not detect this.
+To retain an existing Compose plugin unmanaged, explicitly set
+`docker_compose_enabled: false`; its installation and version checks are skipped.
 
-Publication checks on 2026-10-27 found the exact baseline packages in
-[Docker's noble pool](https://download.docker.com/linux/ubuntu/dists/noble/pool/stable/amd64/),
-but not in its
-[resolute pool](https://download.docker.com/linux/ubuntu/dists/resolute/pool/stable/amd64/)
-(whose engine/plugin versions start at 29.3.1/5.0.2 respectively).
-Ubuntu's native Resolute packages **do** meet the baseline:
-`docker.io=29.1.3-0ubuntu4.1` (security update; base `29.1.3-0ubuntu4`) and
-`docker-compose-v2=2.40.3+ds1-0ubuntu1`.
-See Canonical's
-[Docker changelog](https://github.com/canonical/docker.io-app/blob/ubuntu/resolute/debian/changelog),
-[Compose changelog](https://github.com/canonical/docker-compose-v2/blob/ubuntu/resolute/debian/changelog),
-and actual Ubuntu archive
-[Docker](https://archive.ubuntu.com/ubuntu/pool/universe/d/docker.io-app/) /
-[Compose](https://archive.ubuntu.com/ubuntu/pool/universe/d/docker-compose-v2/)
-package listings. Resolute needs its native `universe` and security repositories.
-Noble's native security backports also meet the baseline; see its
-[Docker changelog](https://github.com/canonical/docker.io-app/blob/ubuntu/noble/debian/changelog)
-and [Compose changelog](https://github.com/canonical/docker-compose-v2/blob/ubuntu/noble/debian/changelog).
-Enable native Noble `universe`, updates and security repositories as well.
-Ubuntu-patched builds are not byte-identical to Docker CE packages.
-Canonical's Compose build embeds the full Debian package version in
-`docker compose version --short` (including `+ds1-0ubuntu...`); that suffix is
-packaging metadata, not permission to accept a different upstream release.
-Docker's CLI uses upstream `29.1.3` with the Ubuntu revision in its build field.
-These publication checks do **not** establish dependency compatibility; the
-per-host apt simulation and real installation remain required.
 Other requested releases have official publication evidence:
-[runner](https://github.com/actions/runner/releases/tag/v2.338.0),
-[kubectl checksum](https://dl.k8s.io/release/v1.37.1/bin/linux/amd64/kubectl.sha256),
+[runner](https://github.com/actions/runner/releases/tag/v2.338.2),
+[kubectl checksum](https://dl.k8s.io/release/v1.37.2/bin/linux/amd64/kubectl.sha256),
 [Minikube](https://github.com/kubernetes/minikube/releases/tag/v1.39.0),
-[Helm](https://github.com/helm/helm/releases/tag/v4.3.0),
+[Helm](https://github.com/helm/helm/releases/tag/v4.3.1),
 [Vagrant](https://releases.hashicorp.com/vagrant/2.4.9/), and
 [vagrant-libvirt](https://rubygems.org/api/v2/rubygems/vagrant-libvirt/versions/0.12.2.json).
-Helm archive/checksum delivery and execution passed on both fresh guests on
-2026-10-28, following an earlier controller DNS failure.
+Updated release pins require fresh installation and runtime acceptance before
+being treated as validated on a target host.
 The [Wasmtime 50.0.0 asset listing](https://github.com/bytecodealliance/wasmtime/releases/expanded_assets/v50.0.0)
 publishes SHA256
 `77c19ee0437991f9ac7837b9c269d9c7076744f85dad263fea5214cc2723c7ff`
@@ -587,7 +565,7 @@ sudo -u ghrunner env HOME=/home/ghrunner \
   KUBECONFIG=/home/ghrunner/.config/runner-kubernetes/minikube/config minikube --profile minikube status
 ```
 
-Defaults: Docker driver, profile `minikube`, Kubernetes `1.37.0`, 2 CPUs,
+Defaults: Docker driver, profile `minikube`, Kubernetes `1.37.2`, 2 CPUs,
 16000 MB RAM. Multiple instances use separate profile identities. Each account
 uses a separate managed kubeconfig, not the existing default Kubernetes
 configuration. Unowned profiles are rejected; existing contexts are not
@@ -631,6 +609,43 @@ pinned release. WASI HTTP needs a compatible WASI HTTP component and explicit
 not an HTTP service. No Rust SDK, Emscripten, WasmEdge or unrelated toolchain is
 installed. Grant filesystem/network capabilities only as required by a workload.
 
+## Runner labels
+
+`task setup:runner` manages labels automatically. GitHub supplies `self-hosted`,
+`Linux` and `X64`; Ansible adds the unique runner name, Ubuntu release and enabled
+managed capabilities. For a fully configured host, the resulting set is:
+
+```text
+self-hosted Linux X64 cysec-io ubuntu-26.04 docker docker-compose
+helm kubectl kubernetes kvm libvirt minikube vagrant wasm wasmtime
+```
+
+The `kubernetes` label requires initialized managed Minikube, not just installed
+client tools. Other labels track enabled installed tools. Optional
+`runner_instances[].labels` contains extra routing labels only; identity, OS and
+capability labels are derived, case-normalized and deduplicated. Old OS/capability
+values cannot preserve a disabled capability. The retired smoke-only label is
+removed automatically, including from old inventory lists.
+
+Generated custom labels use runner name, Ubuntu release, then alphabetically
+sorted capabilities and extras. GitHub controls their visual order in its UI;
+the labels API has no display-order setting. Order alone never triggers an update.
+
+Fresh registrations use the normal short-lived registration token. Existing
+registrations use GitHub's labels API, preserving runner identity and keeping the
+service running. If access is missing, guided setup pauses safely, prompts for
+GitHub CLI browser authorization (no PAT required), and resumes provisioning and
+verification automatically. The OAuth flow requests `admin:org`; alternatively,
+a GitHub App token needs organization self-hosted runner write permission.
+Temporary CLI configuration is private and removed after authorization; Ansible
+receives the credential through a child-process environment, never argv or a
+plaintext repository file. Existing appropriately scoped CLI credentials are reused.
+For unattended runs, put `github_api_token` in Vault. A registration token alone
+cannot modify labels on an existing registration.
+
+`task labels LIMIT=<host> -- --check` previews the same calculated set without
+changing anything. Label-only changes do not require maintenance or re-registration.
+
 ## Functional acceptance and workflow routing
 
 Use **disposable, idle, authorized hosts**. Set both
@@ -642,6 +657,9 @@ URL/checksum in `functional_container_image` and
 (default `default`). Tests create
 unique scopes and use cleanup blocks; cleanup failures are failures, not
 ignored successes. Never run these tests against unrelated kubeconfigs.
+If Vagrant boot fails, its output is saved in a root-owned mode `0600`
+`/var/tmp/mare-runner-vagrant-*.json` diagnostic file before cleanup. The console
+reports only that file's path; inspect it privately and remove it after diagnosis.
 
 The suite covers a Docker container; Compose application up/down; isolated
 Minikube namespace/workload create/delete; a small local Helm chart
@@ -651,36 +669,48 @@ Tests only run for enabled tools; a skipped test is not a verified capability.
 Do not use a mutable container tag, an unversioned Vagrant box, or an arbitrary
 download URL as acceptance evidence.
 
-Run the manual `runner-smoke.yml` workflow **only after operator approval**.
-Supply the workflow's required `runner_group` input explicitly; it has no default.
-For a repository workflow, use your configured group plus a dedicated `mare-smoke`
-label. This example uses a group named `Platform CI`:
+This public repository must never use self-hosted runners, including ENG. Its own
+CI must use GitHub-hosted runners. Keep public-repository access disabled on every
+organization runner group and exclude this repository from private group allowlists.
+
+Run routed acceptance only from an approved private repository, using its
+existing workflows and an authorized runner group. Select the runner with its
+unique runner-name label. This example uses a group named `Platform CI`:
 
 ```yaml
 jobs:
   build:
     runs-on:
       group: Platform CI
-      labels: [self-hosted, linux, x64, mare-smoke]
+      labels: [self-hosted, Linux, X64, resolute-build-01]
     steps:
       - run: docker version && wasmtime --version
 ```
 
-Use a unique acceptance label or instance-specific label to ensure routing to
-the newly provisioned runner, not an existing production runner. GitHub's
-default labels are retained. The workflow is supplied, **not dispatched** by
-provisioning or development.
-
-GitHub requires a `workflow_dispatch` workflow to exist on the default branch
-before its first manual dispatch; selecting the PR branch alone does not
-bootstrap it. See [GitHub's manual workflow requirements](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
-Keep your selected group restricted to private repositories. Run routed acceptance from an
-approved private repository, using a reviewed copy of this smoke workflow on
-that repository's default branch and unique test-runner labels. This public
-repository can use GitHub-hosted runners for its own CI. Preserve the selected group's private
-repository policy; do not enable public access for acceptance.
+Use the runner-name label to select the newly provisioned runner. GitHub's
+default labels are retained; no smoke-test label is needed. Provisioning never
+dispatches GitHub workflows or enables public access to runner groups.
 
 ## Safe maintenance, upgrades and removal
+
+For an explicitly approved Ubuntu-to-Docker-CE provider migration, use the
+separate maintenance playbook on **one host**. It saves private configuration,
+original engine packages and a complete cold Docker/containerd snapshot before
+replacement, checks the apt removal plan, and resumes only previously running
+containers. This interrupts workloads; arrange the maintenance window first.
+
+```bash
+task maintenance:docker LIMIT=cysec-io -- \
+  -e '{"docker_migration_confirmed":true,"tool_allow_upgrades":true,"maintenance_confirmed":true,"tools_drain_confirmed":true}'
+```
+
+Set `docker_migration_project_paths` to any external Compose/configuration
+folders that must join the private backup. Backups and recovery instructions
+remain under `/var/backups/mare-runner/docker-upstream-<timestamp>` on the target.
+The migration never purges volumes, automatically downgrades packages, or enables
+migration during normal `task setup:runner`. Confirm workload health afterward,
+then resume normal provisioning. Original stopped containers remain stopped.
+
 
 1. Stop **new** jobs by removing repository access to the runner group or
    changing workflow routing to a drained group. Coordinate this in GitHub;
@@ -694,7 +724,7 @@ repository policy; do not enable public access for acceptance.
    Never authorize these globally in a routine production inventory.
 4. Update version variables and matching checksums, review release notes, and
    explicitly allow tool upgrades with `tool_allow_upgrades: true`.
-   Re-registration due to changed labels/group/work/update policy requires
+   Re-registration due to changed group/work/update policy requires
    `runner_allow_reconfigure: true`.
 5. Run provisioning and verification on one drained host at a time; restore
    routing only after verification, then reset maintenance switches.
@@ -764,7 +794,7 @@ runner credential files, caches, kubeconfigs or workload data in reports.
 Local syntax checks alone are not platform acceptance; absent infrastructure
 and credentials remain external acceptance prerequisites.
 
-Run `task validate` (an alias for `task syntax`) to syntax-check all three
+Run `task validate` (an alias for `task syntax`) to syntax-check all maintained
 playbooks using the tracked configuration and example inventory, without
 contacting runner hosts.
 
@@ -772,9 +802,6 @@ Keep sanitized operational reports locally under `tests/evidence/` (ignored by
 Git), or in a private artifact store. These generated reports are not repository
 source and should not be committed.
 
-Reports retain actual versions, recaps and source/log hashes. Registration used
-a short-lived token; GitHub API availability checks were skipped and the signed-in
-UI confirmed both runners Idle in ENG. Local smoke execution does not prove
-GitHub job routing. PR #1 merged with dispatched smoke retained as a post-merge
-gate, to be completed from an approved private repository. ENG remains restricted
-to private repositories.
+Reports retain actual versions, recaps and source/log hashes. Local smoke
+execution does not prove GitHub job routing; routed acceptance belongs in an
+approved private repository. ENG remains restricted to private repositories.

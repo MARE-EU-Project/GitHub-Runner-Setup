@@ -1,0 +1,32 @@
+---
+- name: Notify guided setup only when label management authentication is missing
+  delegate_to: localhost
+  become: false
+  ansible.builtin.copy:
+    dest: '{{ runner_setup_auth_request }}'
+    content: 'organization-runner-labels'
+    mode: '0600'
+  vars:
+    runner_setup_auth_request: "{{ lookup('ansible.builtin.env', 'RUNNER_SETUP_AUTH_REQUEST', default='') }}"
+  when:
+    - runner_effective_api_token | default('') | length == 0 or runner_label_auth_denied | default(false) | bool
+    - runner_setup_auth_request | length > 0
+
+- name: Pause this host so guided setup can obtain authorization and resume
+  ansible.builtin.meta: end_host
+  vars:
+    runner_setup_auth_request: "{{ lookup('ansible.builtin.env', 'RUNNER_SETUP_AUTH_REQUEST', default='') }}"
+  when:
+    - runner_effective_api_token | default('') | length == 0 or runner_label_auth_denied | default(false) | bool
+    - runner_setup_auth_request | length > 0
+
+- name: Require organization runner-write permission for an existing registration
+  ansible.builtin.assert:
+    that:
+      - runner_effective_api_token | default('') | length > 0
+      - not runner_label_auth_denied | default(false) | bool
+    fail_msg: >-
+      Label updates need organization runner-write API access. Guided
+      task setup:runner will prompt for secure GitHub authentication.
+      For unattended provisioning, supply github_api_token through Vault.
+      The runner registration and service are preserved.
