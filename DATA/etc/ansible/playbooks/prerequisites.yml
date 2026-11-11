@@ -7,6 +7,7 @@
       ansible.builtin.import_role:
         name: tools
         tasks_from: noop
+      tags: [always]
 
     - name: Require a supported runner target
       ansible.builtin.assert:
@@ -15,6 +16,30 @@
           - ansible_facts.distribution_release in ['noble', 'resolute']
           - ansible_facts.architecture == 'x86_64'
           - runner_instances | length > 0
+      tags: [always]
+
+    - name: Install Poppler through normal guarded package provisioning
+      ansible.builtin.include_role:
+        name: tools
+        tasks_from: packages
+        apply:
+          become: true
+          tags: [pdf-tools]
+      vars:
+        tools_requested_packages: [poppler-utils]
+      tags: [pdf-tools]
+
+    - name: Verify PDF inspection tools on each runner job PATH
+      ansible.builtin.include_role:
+        name: verification
+        tasks_from: pdf-tools
+        apply:
+          tags: [pdf-tools]
+      loop: '{{ runner_instances }}'
+      loop_control:
+        loop_var: verification_instance
+        label: '{{ verification_instance.name }}'
+      tags: [pdf-tools]
 
     - name: Install ShellCheck through normal guarded tool provisioning
       ansible.builtin.include_role:

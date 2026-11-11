@@ -1,0 +1,14 @@
+---
+- name: Verify Poppler inspection tools as the unprivileged runner account
+  become: true
+  become_user: '{{ verification_instance.user }}'
+  ansible.builtin.command:
+    argv: '{{ item }}'
+  environment:
+    PATH: '{{ verification_path }}'
+    HOME: '/home/{{ verification_instance.user }}'
+  loop:
+    - [pdftotext, -v]
+    - [pdfinfo, -v]
+  changed_when: false
+  when: not ansible_check_mode

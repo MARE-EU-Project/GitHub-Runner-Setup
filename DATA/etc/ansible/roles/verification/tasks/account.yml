@@ -103,6 +103,9 @@
       (item.version | regex_escape) ~ '(?![0-9.])'))
   no_log: true
 
+- name: Verify PDF inspection tools on the runner job PATH
+  ansible.builtin.include_tasks: pdf-tools.yml
+
 - name: Verify Docker daemon access as the runner account
   become: true
   become_user: "{{ verification_instance.user }}"

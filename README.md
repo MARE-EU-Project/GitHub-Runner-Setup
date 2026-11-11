@@ -611,7 +611,7 @@ installed. Grant filesystem/network capabilities only as required by a workload.
 
 ## Runner job prerequisites
 
-`task setup:runner` installs ShellCheck and exposes the managed cluster as context
+`task setup:runner` installs ShellCheck and Poppler (`poppler-utils`) and exposes the managed cluster as context
 `minikube` only inside each runner's private kubeconfig. The existing named cluster
 and service `MINIKUBE_PROFILE` are preserved, so default Minikube commands target
 that runner's cluster. Administrator kubeconfigs and unrelated profiles are untouched.
@@ -623,7 +623,23 @@ to use the real `/usr/local/bin/minikube` directly.
 For existing hosts, `task prerequisites LIMIT=<host>` applies only these prerequisites,
 without upgrading Docker or restarting the runner. Context changes refuse active
 jobs; retry after the selected runner is idle. `task verify LIMIT=<host>` checks
-ShellCheck, the selected context, the Ready node and default Minikube profile.
+ShellCheck, Poppler, the selected context, the Ready node and default Minikube profile.
+
+For PDF checks alone on an existing idle host, run:
+
+```bash
+task prerequisites LIMIT=<host> -- --tags pdf-tools
+```
+
+This installs Poppler through the guarded package transaction and verifies
+`pdftotext` and `pdfinfo` as each unprivileged runner account. It skips cluster
+configuration and the other prerequisite tasks. Repeating the command makes no
+changes once the package is installed. The guard still rejects dependency
+upgrades without the normal maintenance and drain confirmations.
+
+Asciidoctor creates the documentation PDFs. Poppler checks the resulting PDFs
+for broken command pagination and links; it is required by the documentation
+publishing gate on both supported Ubuntu releases.
 
 ShellCheck uses the native stable package on Ubuntu 26.04 and the checksum-pinned
 official release where the native package is older. Existing newer releases are
